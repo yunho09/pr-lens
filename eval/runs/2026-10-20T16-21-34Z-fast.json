@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "mode": "fast",
+  "model": null,
+  "startedAt": "2026-10-20T16:21:34.724Z",
+  "finishedAt": "2026-10-20T16:22:22.039Z",
+  "casesFile": "eval/cases.json",
+  "limit": 3,
+  "concurrency": 2,
+  "metrics": {
+    "cases": 3,
+    "errors": 0,
+    "unscorable": 0,
+    "buggyHunks": 4,
+    "missingHunks": 0,
+    "caseRecallMust": 1,
+    "caseRecallMustShould": 1,
+    "hunkRecallMust": 1,
+    "mustRate": 0.41111111111111115,
+    "firstHitRank": 1.3333333333333333,
+    "firstHitCases": 3,
+    "noiseMisses": 0,
+    "totalCostUsd": 0.30205440000000006,
+    "totalDurationMs": 88204
+  },
+  "cases": [
+    {
+      "id": "honojs/hono#5236-fix#5243",
+      "analysisKey": "honojs/hono#5236",
+      "prUrl": "https://github.com/honojs/hono/pull/5236",
+      "fixUrl": "https://github.com/honojs/hono/pull/5243",
+      "title": "fix(trie-router): match suffix wildcard routes",
+      "durationMs": 47314,
+      "placements": [
+        {
+          "path": "src/router/trie-router/node.ts",
+          "fingerprint": "51c9153850746e23ecee2aaa1de698d4a2bc267a",
+          "placement": "must",
+          "hunkId": "f2h0",
+          "rank": 1
+        },
+        {
+          "path": "src/router/trie-router/node.ts",
+          "fingerprint": "39fa4995d15d9b1d2b699df5339c2d19e126d415",
+          "placement": "must",
+          "hunkId": "f2h2",
+          "rank": 2
+        }
+      ],
+      "keptHunks": 9,
+      "mustCount": 3,
+      "shouldCount": 3,
+      "costUsd": 0.167672,
+      "modeUsed": "fast",
+      "firstHitRank": 1,
+      "toolCalls": null,
+      "warnings": []
+    },
+    {
+      "id": "honojs/hono#4329-fix#5488",
+      "analysisKey": "honojs/hono#4329",
+      "prUrl": "https://github.com/honojs/hono/pull/4329",
+      "fixUrl": "https://github.com/honojs/hono/pull/5488",
+      "title": "fix(router): support `/files/:name{.*}`",
+      "durationMs": 24323,
+      "placements": [
+        {
+          "path": "src/router/reg-exp-router/node.ts",
+          "fingerprint": "d6be93cc0f30099117654c9e959356a0bbc5a762",
+          "placement": "must",
+          "hunkId": "f2h0",
+          "rank": 2
+        }
+      ],
+      "keptHunks": 5,
+      "mustCount": 2,
+      "shouldCount": 1,
+      "costUsd": 0.09068000000000001,
+      "modeUsed": "fast",
+      "firstHitRank": 2,
+      "toolCalls": null,
+      "warnings": []
+    },
+    {
+      "id": "honojs/hono#4267-fix#5297",
+      "analysisKey": "honojs/hono#4267",
+      "prUrl": "https://github.com/honojs/hono/pull/4267",
+      "fixUrl": "https://github.com/honojs/hono/pull/5297",
+      "title": "fix(client): remove `index` string when calling `$url()`",
+      "durationMs": 16567,
+      "placements": [
+        {
+          "path": "src/client/client.ts",
+          "fingerprint": "7d1a3ff6f9e07f531f9ed68fffc4a1611f8fc54f",
+          "placement": "must",
+          "hunkId": "f1h0",
+          "rank": 1
+        }
+      ],
+      "keptHunks": 2,
+      "mustCount": 1,
+      "shouldCount": 1,
+      "costUsd": 0.0437024,
+      "modeUsed": "fast",
+      "firstHitRank": 1,
+      "toolCalls": null,
+      "warnings": []
+    }
+  ]
+}

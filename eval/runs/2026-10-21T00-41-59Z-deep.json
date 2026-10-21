@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "mode": "deep",
+  "model": null,
+  "startedAt": "2026-10-21T00:41:59.294Z",
+  "finishedAt": "2026-10-21T00:43:11.186Z",
+  "casesFile": "eval/cases.json",
+  "limit": 1,
+  "concurrency": 2,
+  "metrics": {
+    "cases": 1,
+    "errors": 0,
+    "unscorable": 0,
+    "buggyHunks": 2,
+    "missingHunks": 0,
+    "caseRecallMust": 1,
+    "caseRecallMustShould": 1,
+    "hunkRecallMust": 1,
+    "mustRate": 0.2222222222222222,
+    "firstHitRank": 1,
+    "firstHitCases": 1,
+    "noiseMisses": 0,
+    "totalCostUsd": 0.2662446,
+    "totalDurationMs": 71891
+  },
+  "cases": [
+    {
+      "id": "honojs/hono#5236-fix#5243",
+      "analysisKey": "honojs/hono#5236",
+      "prUrl": "https://github.com/honojs/hono/pull/5236",
+      "fixUrl": "https://github.com/honojs/hono/pull/5243",
+      "title": "fix(trie-router): match suffix wildcard routes",
+      "durationMs": 71891,
+      "placements": [
+        {
+          "path": "src/router/trie-router/node.ts",
+          "fingerprint": "51c9153850746e23ecee2aaa1de698d4a2bc267a",
+          "placement": "must",
+          "hunkId": "f2h0",
+          "rank": 1
+        },
+        {
+          "path": "src/router/trie-router/node.ts",
+          "fingerprint": "39fa4995d15d9b1d2b699df5339c2d19e126d415",
+          "placement": "must",
+          "hunkId": "f2h2",
+          "rank": 2
+        }
+      ],
+      "keptHunks": 9,
+      "mustCount": 2,
+      "shouldCount": 3,
+      "costUsd": 0.2662446,
+      "modeUsed": "deep",
+      "firstHitRank": 1,
+      "toolCalls": 3,
+      "warnings": []
+    }
+  ]
+}

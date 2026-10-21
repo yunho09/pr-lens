@@ -1,36 +1,194 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PR Lens
 
-## Getting Started
+GitHub PR 링크를 붙여넣으면 **리뷰어가 먼저 볼 것**과 **건너뛰어도 될 것**을 골라 주는 읽기 가이드입니다.
+PR에 댓글을 다는 봇이 아니라, 사람이 리뷰할 때 어디에 집중할지 알려 주는 로컬 도구입니다. 내 컴퓨터에서 혼자 쓰는 용도라 배포·로그인 화면이 없습니다.
 
-First, run the development server:
+## 준비물
+
+- Node.js (v26에서 확인), npm
+- GitHub CLI 로그인: `gh auth login` (또는 환경 변수 `GITHUB_TOKEN`)
+- Claude Code CLI 로그인: 터미널에서 `claude`가 실행되고 로그인되어 있어야 합니다. API 키는 쓰지 않습니다.
+
+## 실행
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run app   # 평소 사용 (빌드 후 127.0.0.1에서 실행)
+npm run dev   # 이 앱의 코드를 고칠 때
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+브라우저에서 http://localhost:3000 (또는 http://127.0.0.1:3000) 을 열고 PR 링크를 붙여넣으세요.
+`/files`, `/commits`, 쿼리, `#` 앵커가 붙은 링크나 `https://`가 빠진 링크도 받습니다.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 환경 변수
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| 이름 | 설명 |
+| --- | --- |
+| `GITHUB_TOKEN` | GitHub 토큰. 없으면 `gh auth token`으로 가져옵니다. 토큰은 서버에만 있고 브라우저나 Claude CLI 프로세스로 보내지 않습니다. |
+| `PR_LENS_MODEL` | Claude 모델 지정 (`claude --model` 값). 비워 두면 CLI 기본 모델을 씁니다. |
+| `PR_LENS_MAX_BUDGET` | Claude 호출 1번에 쓸 수 있는 비용 한도(USD, 기본 `3`). 깊게 보기와 빠른 모드 모두에 적용됩니다. 넘으면 분석이 멈추고 오류로 알려 줍니다. |
+| `PR_LENS_CACHE_DIR` | 분석 결과 캐시 폴더. 기본은 `.cache/reviews/` (프로젝트 폴더 기준). |
 
-## Learn More
+## 분석 방식
 
-To learn more about Next.js, take a look at the following resources:
+1. **가져오기** — GitHub REST API로 PR 정보와 변경 파일(diff) 목록을 가져옵니다. GitHub은 파일 목록을 최대 3000개까지만 주므로, 그보다 큰 PR은 몇 개를 못 받았는지 경고로 알려 줍니다 (나머지는 GitHub에서 직접 확인).
+2. **노이즈 필터 (규칙 기반, AI 없음)** — 원칙은 하나입니다: **동작을 바꿀 수 있는 변경은 Claude와 사용자 양쪽에서 동시에 숨기지 않습니다.**
+   - ⚫ **건너뛰어도 됨** (Claude에게 보내지 않음): 락파일(`package-lock.json`, `pnpm-lock.yaml`, `go.sum` …), 테스트 스냅샷(`*.snap`), 실행 위치와 상관없는 단순 이름 변경·이동 (다른 파일을 락파일·`.snap` 이름으로 바꾼 것은 제외), diff가 없는 이미지·폰트·오디오·비디오·PDF.
+   - 🟣 **확인 필요** (Claude가 읽을 diff가 없어 직접 확인할 것), 이유와 함께 표시합니다.
+     - "실행 파일·바이너리 변경 — 직접 확인": `.jar`, `.so`, `.dll`, `.exe`, `.class`, `.pyc`, `.wasm`, `.node`, `.dylib`, `.a`, `.o`, `.bin`
+     - "diff 없음 (권한 변경·빈 파일·바이너리일 수 있음) — 직접 확인", "GitHub이 diff를 제공하지 않음 — 직접 확인": 확장자 없는 바이너리, SVG, 압축 파일, 문서 등 diff가 없는 나머지 전부
+     - "이름 변경 — 실행 위치가 바뀔 수 있음": 내용은 그대로지만 `.github/`, `.husky/`, `.git-hooks/`, `hooks/`, `bin/` 안팎으로 옮기거나, `Dockerfile`·`Makefile`·`package.json`·`*.sh`·CI 설정 파일 이름이 되거나 그 이름에서 바뀌거나, 테스트 파일과 일반 파일 사이를 오가는 경우(`foo.test.js` → `foo.js`), 확장자가 바뀌는 경우(`policy.js` → `policy.snap`)
+     - "diff를 해석할 수 없음 — 직접 확인": GitHub이 준 diff에 해석할 수 없는 `@@` 줄이 있으면 일부만 읽지 않고 파일 전체를 여기로 보냅니다.
+   - 그 밖의 파일은 모두 Claude에게 보냅니다. 예전에 걸러 내던 것들은 힌트를 붙여 예산 순서의 맨 뒤로 보냅니다 (4번 참고).
+     - **생성 코드 경로**: `dist/`, `vendor/`, `node_modules/`, `.next/`, `coverage/`, `__generated__/`(어느 깊이든), 레포 맨 위의 `build/`·`out/`, `*.min.*`, `*.map`, `*.pb.go` 등. GitHub Action의 `dist/index.js`나 벤더 코드처럼 실제로 배포·실행되는 코드일 수 있기 때문입니다.
+     - **줄 끝 공백만**: 줄 끝 공백·탭, CR(CRLF ↔ LF), 파일 끝 줄바꿈만 바뀐 조각. Makefile 변수 값, 셸 heredoc 종결자(`EOF ` / `EOF␍`), 줄 끝 `\` 뒤의 CR, Markdown 줄바꿈, 문자열 안에서는 이것도 동작을 바꿉니다.
+     - **포맷팅으로 보임**: 규칙상 공백만 바뀐 것처럼 보이는 조각(괄호·연산자 옆 공백, 들여쓰기, 빈 줄 등).
+3. **레포 내려받기 (깊게 보기만)** — PR head 커밋의 레포를 내려받습니다. 아래 [깊게 보기](#깊게-보기)를 참고하세요.
+4. **Claude 분류** — 남은 코드 조각을 Claude Code CLI(`claude -p`)에 한 번 보내 각각을 🔴 먼저 볼 것 / 🟡 확인 권장 / ⚪ 훑어봐도 됨으로 나누고, 읽는 순서·설명·이유·확인할 질문·중요한 줄·같이 볼 곳을 받습니다.
+   diff가 30만 자를 넘으면 일반 코드 → 테스트 → 문서·설정 → 포맷팅으로 보임 → 줄 끝 공백만 → 생성 코드 경로 순으로 넣고, 못 넣은 조각은 "너무 커서 분석 생략"으로 🟣 "확인 필요"에 표시합니다.
+   **힌트** — 힌트가 붙은 조각은 Claude에게 그 사실과 함께 무엇을 확인할지(공백·CR이 의미를 갖는 문맥, 생성 코드가 소스와 맞는지)를 알려 주고, 카드에는 "포맷팅으로 보임" / "줄 끝 공백만" / "생성 코드 경로" 표시가 나옵니다. 힌트일 뿐이라, 실제로 동작이 바뀌면 Claude가 다른 조각과 똑같이 분류합니다. 줄 끝의 CR은 프롬프트와 화면에 `␍`로 보여 줍니다.
+   PR 내용(diff는 그대로 보냄)이 `</diff>` 같은 글자로 입력 구조를 흉내 내지 못하도록, 구조를 나누는 태그에는 요청마다 바뀌는 무작위 꼬리표를 붙이고 그 꼬리표가 붙은 태그만 구조로 보라고 Claude에게 알려 줍니다.
+   같은 PR을 전에 분석했다면 바뀐 조각만 보냅니다 ([다시 볼 때](#다시-볼-때-증분-리뷰)).
+5. **결과 검증** — 모르는 hunk id는 버리고, 빠진 조각은 "AI가 분류하지 않음"(AI 미분류)으로 채우고, 강조 줄 번호를 실제 범위로 맞추고, 같이 볼 곳은 실제로 있는 파일만 남깁니다.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+분석은 PR 크기에 따라 보통 30초~2분, 깊게 보기는 그보다 더 걸립니다. 페이지를 떠나거나(취소) 10분 안에 끝나지 않으면 Claude 프로세스를 하위 프로세스(검색 도구 등)까지 통째로 종료합니다.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 깊게 보기
 
-## Deploy on Vercel
+첫 화면의 **깊게 보기 (주변 코드 읽기)** 체크(기본 켜짐)를 끄면 diff만 보는 빠른 모드로 분석합니다. 결과 화면에서도 모드를 바꿀 수 있습니다.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- **무엇을 읽나** — Claude가 diff 밖에서 확인해야 할 것을 레포에서 찾아봅니다: 바뀐 함수의 호출부, 쓰는 타입·헬퍼의 정의, 관련 테스트, 지운 로직이 다른 곳으로 옮겨 갔는지. 🔴·🟡 후보에 집중하고 도구 호출은 15번 안팎으로 제한하도록 지시합니다. 진행 화면에 Claude가 읽은 파일과 검색이 실시간으로 나옵니다.
+- **샌드박스** — `claude -p --restricted`로, 도구는 읽기 전용 `Read`·`Grep`·`Glob`만 켜고 작업 폴더를 내려받은 레포로 둡니다. 사용자 설정·MCP·슬래시 명령은 불러오지 않습니다. 레포 밖 파일을 읽으려는 시도는 차단되며, 차단이 있었으면 "PR 내용이 레포 밖 파일 접근을 유도했을 수 있음: N건 차단됨" 경고를 결과 위에 보여 줍니다. 그런 PR은 설명과 코드에 이상한 지시문이 없는지 확인하세요.
+- **Claude 프로세스에 넘기는 환경 변수** — `GITHUB_TOKEN`·`GH_TOKEN`은 항상 빼고, `CLAUDE`로 시작하는 변수는 로그인·제공자에 필요한 허용 목록만 넘깁니다: `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`, 제공자 선택 `CLAUDE_CODE_USE_*`, `CLAUDE_CODE_SKIP_*_AUTH`, 인증서(mTLS) 설정과 게이트웨이 설정. 이 앱을 Claude Code 안에서 띄웠을 때 따라오는 `CLAUDECODE` 같은 세션 변수를 포함해 나머지 `CLAUDE*` 변수는 넘기지 않습니다.
+- **레포 위치와 한도** — 어디서 실행하든 항상 `${XDG_CACHE_HOME:-~/.cache}/pr-lens/repos/{owner}__{repo}__{sha}/`에 GitHub tarball을 풀어 둡니다. 프로젝트 폴더 밖이라, 내려받은 레포의 `CLAUDE.md` 같은 파일이 이 프로젝트에서 여는 Claude Code 세션에 섞이지 않습니다.
+  압축 파일이 300MB를 넘거나, 풀었을 때 2GB 또는 파일 20만 개를 넘으면 내려받지 않고 diff만 분석합니다(경고 표시). 풀기 전에 `tar -tv --numeric-owner`로 목록을 먼저 훑어 크기를 재며, 크기를 읽을 수 없는 항목이 있으면 안전한 쪽으로 판단해 풀지 않고 diff만 분석합니다(경고 표시). 레포는 최근 5개만 남기되, 분석 중인 레포는 지우지 않습니다. 앱 서버와 `eval:run`처럼 여러 프로세스가 같은 폴더를 쓸 때도, 다른 프로세스가 읽는 중인 레포는 옆에 둔 잠금 파일(`….inuse-{pid}`)로 알아보고 지우지 않습니다 (죽은 프로세스의 잠금은 정리).
+- **diff만 분석으로 바뀔 때** — 레포가 너무 커서 diff만 분석한 결과는 깊게 보기 결과로 캐시합니다 (다시 열어도 같은 이유로 diff만 보게 되므로). 네트워크 오류처럼 **일시적인 이유로** 내려받지 못했을 때는 결과를 캐시하지 않아, 다음에 열면 레포 내려받기를 다시 시도합니다. 두 경우 모두 결과 위에 경고가 나옵니다.
+- **비용** — 레포를 읽는 만큼 빠른 모드보다 비쌉니다. 호출 1번의 한도는 `PR_LENS_MAX_BUDGET`(기본 $3, 빠른 모드도 같은 한도)입니다.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 다시 볼 때 (증분 리뷰)
+
+같은 PR을 다른 head 커밋에서 **같은 모드로** 분석한 결과가 캐시에 있으면, 코드 조각마다 **위치 키**로 짝을 맞춥니다. 다른 모드의 결과는 물려받지 않습니다 (빠른 모드 결과에는 레포를 읽은 설명·같이 볼 곳이 없고, 그 반대도 마찬가지라서).
+
+- **위치 키** = 파일 경로 + `@@` 줄의 함수 이름 부분 + 바뀐 줄 앞뒤 최대 3줄의 문맥 + 바뀐 줄(줄 번호 제외, 줄 끝 CR·파일 끝 줄바꿈 여부 포함)의 sha1. CR 하나만 덧붙인 수정도 새 조각으로 봅니다. 위에 줄이 추가돼 조각이 아래로 밀리기만 했으면 같은 키라 물려받고, **같은 줄을 다른 함수에서 지우는 것처럼 내용은 같아도 위치가 다르면** 새 조각으로 보고 Claude에게 다시 보냅니다. 문맥이 조금이라도 달라지면 물려받지 않고 다시 분석합니다(안전한 쪽).
+- 그대로인 조각은 지난 결과를 물려받고(카드에 "↺ 이전 분석"), 강조 줄은 옮겨 간 위치에 맞춥니다. 같은 키의 조각이 여러 개면 하나씩 짝을 맞춥니다.
+- 위치 키가 없던 예전 저장 형식의 결과는 읽지 않으므로(아래 [캐시](#캐시)), 앱을 업데이트한 뒤 처음 여는 PR은 처음부터 다시 분석합니다.
+- Claude에게는 **새 조각**과, 지난번에 **분류되지 않았거나(AI 미분류) 너무 커서 생략된 조각**만 보내고, 물려받은 목록과 지난 요약을 함께 줘서 요약·읽는 순서를 PR 전체 기준으로 다시 쓰게 합니다.
+- 분석 대상의 70%가 넘게 바뀌었으면 처음부터 다시 분석합니다. 결과 화면의 "다시 분석"도 전부 다시 분석합니다(비교 결과는 그대로 보여 줌).
+- 바뀐 조각도 사라진 조각도 없으면(노이즈 파일만 바뀜) Claude를 부르지 않고 지난 결과를 씁니다. 조각이 **사라지기만** 했으면 지난 요약이 없어진 코드를 설명하고 있을 수 있어 전부 다시 분석합니다.
+
+결과 위의 배너에 지난 분석(커밋·시각)과 비교한 수가 나옵니다: **새 변경 N · 다시 분석 M · 그대로 K · 사라짐 R** (다시 분석 = 바뀌지 않았지만 이번에 다시 분류한 조각, 0이면 안 보임).
+배너의 **새로 분석한 것만 보기**를 켜면 이번에 Claude가 분류한 카드(새 변경 + 다시 분석)만 보이고, 지난 결과를 그대로 쓴 🟡·⚪ 카드는 숨깁니다. **🔴 먼저 볼 것은 지난 결과라도 숨기지 않고** 섹션과 추천 동선에 "↺" 표시와 함께 남깁니다. 숨길 것과 보일 것이 둘 다 있을 때 기본으로 켜집니다. 새 조각 카드에는 NEW 표시가 붙습니다.
+
+개발용으로, 이전 커밋 시점의 분석을 만들어 증분 경로를 직접 확인할 수 있습니다 (이전 상태를 Claude로 1번 실제 분석합니다):
+
+```bash
+npm run simulate:incremental -- <PR 링크> <이전 커밋 SHA> [--mode deep|fast]
+# 그다음 앱에서 같은 PR을 열면 이 결과와 비교합니다.
+```
+
+## 화면 사용법
+
+- **추천 동선** — 왼쪽(모바일은 위)에 AI가 고른 읽는 순서대로 🔴·🟡 카드를 번호로 보여 줍니다. 누르면 해당 카드로 이동하고, 봤음 진행률이 나옵니다.
+- **같이 볼 곳** — 카드마다 조각 밖에서 함께 열어 볼 곳(호출부, 정의, 테스트 등)을 최대 3개 보여 줍니다. 깊게 보기에서는 레포에 실제로 있는 파일만, 빠른 모드에서는 이 PR의 파일만 남깁니다. 링크는 PR head 커밋의 GitHub 파일로 열립니다.
+- 카드의 `파일:줄` 링크를 누르면 GitHub의 해당 줄로 이동합니다.
+- 카드마다 "봤음" 체크가 있습니다. 브라우저 localStorage에 **PR별로 조각의 위치 키를 저장**하므로(`pr-lens:seen:v3:owner/repo/번호`), 새 커밋이 올라와도 자리만 옮긴 조각은 체크가 남고, 바뀐 조각이나 같은 내용이 다른 위치로 간 조각은 다시 풀립니다. 같은 PR을 연 다른 탭과도 맞춰집니다. (이전 버전의 `v2` 기록은 내용 지문 기준이라 이어받지 않습니다.)
+- 단축키: `j`/`k` 다음·이전 카드, `x` 봤음 표시
+
+## 보안
+
+내 컴퓨터에서만 쓰는 도구라, 다른 사이트가 이 서버를 대신 부르지 못하게 막아 둡니다.
+
+- `npm run dev`·`npm start`는 `127.0.0.1`에만 열립니다 (같은 네트워크의 다른 기기에서 접속 불가).
+- **모든 페이지**(첫 화면의 최근 분석 목록 포함)와 API, 정적 파일이 `Host`가 `localhost`·`127.0.0.1`일 때만 응답합니다. 그 밖의 Host는 403입니다 (DNS 리바인딩으로 페이지 내용을 읽어 가는 것을 막음). 같은 네트워크(LAN)에서 접속하거나 다른 호스트 이름으로 쓰려면 코드(`src/proxy.ts`)를 고쳐야 합니다.
+- 다른 사이트가 이 앱을 iframe에 넣어 클릭을 유도하지 못하도록 모든 응답에 `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`을 붙입니다.
+- 분석 API(`POST /api/review`)는 다음 요청을 거절합니다. 다른 사이트의 페이지가 브라우저를 통해 요청을 보내거나(CSRF), DNS 리바인딩으로 접근하는 것을 막기 위해서입니다.
+  - `Host`가 `localhost`·`127.0.0.1`이 아닌 요청 → 403
+  - `Origin`이 이 앱과 다른 요청(다른 사이트, 다른 포트) → 403
+  - `Content-Type`이 `application/json`이 아닌 요청 → 415
+- 다른 사이트의 링크, 같은 컴퓨터의 다른 포트에서 도는 앱의 링크로 들어오거나 페이지가 프레임 안에서 열리면 **유료 분석을 자동으로 시작하지 않습니다**. 캐시된 결과가 있으면 그것만 보여 주고, 없으면 "분석 시작" 버튼을 누를 때까지 기다립니다. 주소창에 직접 입력하거나 북마크로 열거나, 앱 안에서 이동하면(첫 화면에서 PR 링크를 넣고 넘어가는 것 포함) 바로 분석합니다.
+  - **알고 있는 한계:** Discord·Slack·메일 앱 같은 **데스크톱 앱**에서 누른 링크는 브라우저에 "직접 입력"과 똑같이 들어오므로 구별할 수 없어, 바로 분석이 시작됩니다. 모르는 사람이 보낸 `localhost:3000/review/…` 링크는 누르지 마세요. 비용은 호출당 `PR_LENS_MAX_BUDGET` 한도 안입니다.
+- 서버(또는 그 프로세스 그룹)에 Ctrl+C(SIGINT)·SIGTERM·SIGHUP을 보내면 실행 중인 Claude 프로세스를 하위 프로세스까지 먼저 종료한 뒤 꺼집니다. 서버가 꺼진 뒤에 Claude가 혼자 남아 비용을 쓰지 않습니다. 단, `npm` 부모 프로세스에만 SIGTERM을 보내면 npm이 그 신호를 실제 서버(`next-server`)에 넘기지 않으니, 터미널에서 Ctrl+C로 끄거나 프로세스 그룹 전체에 신호를 보내세요.
+
+## 남은 위험 (알려진 한계)
+
+- **락파일·스냅샷은 분석하지 않습니다.** ⚫ "건너뛰어도 됨"에 들어가 Claude가 보지 않으므로, 락파일 안의 패키지 다운로드 주소를 바꿔치기하는 식의 변경은 잡지 못합니다. ⚫ 목록에 예상 밖의 락파일 변경이 없는지 직접 훑어보세요.
+- **깊게 보기의 검색은 PR이 숨길 수 있습니다.** `Grep`·`Glob`은 ripgrep 규칙을 따르므로, PR head에 `.ignore`·`.rgignore` 파일을 넣으면 일부 파일이 검색 결과에서 빠질 수 있습니다. 경로를 알면 `Read`로는 여전히 읽힙니다.
+- **내용 변경 없는 이름 변경은 대부분 건너뜁니다.** 위 🟣 규칙에 해당하지 않는 이동(예: `src/lib/admin.ts` → `src/pages/api/admin.ts`처럼 라우팅 폴더로 옮기기, `config.example.json` → `config.json`)은 ⚫에 들어가니, ⚫의 이름 변경 목록도 훑어보세요.
+- **Fetch Metadata(`Sec-Fetch-*` 헤더)를 보내지 않는 브라우저**에서는 링크가 어디서 왔는지 알 수 없어, 리뷰 링크를 열면 바로 분석이 시작됩니다.
+- **데스크톱 앱(Discord·Slack·메일 등)에서 누른 링크**도 직접 입력과 구별되지 않아 바로 분석이 시작됩니다. 모르는 사람이 보낸 `localhost:3000/review/…` 링크는 누르지 마세요.
+- **평소에는 `npm run app`으로 쓰세요** (빌드 후 실행). `npm run dev`(`next dev`)는 개발용 기능(파일 변경 감시, 에디터 열기 같은 개발 전용 경로 등)을 함께 띄우므로, 매일 쓰는 용도로는 빌드한 서버가 더 좁고 빠릅니다.
+
+## 캐시
+
+결과는 `.cache/reviews/{owner}__{repo}__{번호}__{headSha}__{mode}.json`에 저장됩니다 (git에 올라가지 않음, 폴더는 `PR_LENS_CACHE_DIR`로 바꿀 수 있음).
+같은 PR·모드이고 새 커밋이 없으면 저장된 결과를 바로 보여 주고, "다시 분석"을 누르면 새로 분석합니다. 결과 파일에는 PR의 base 커밋도 기록해 두고, base 커밋이 바뀌었으면(대상 브랜치 변경, base 브랜치 이동 등 — head가 같아도 diff가 달라짐) 저장된 결과를 쓰지 않고 다시 분석합니다.
+저장 형식 버전(지금은 3)이 바뀌면 예전 파일은 무시하고 다시 분석합니다. 예전 규칙으로 걸러 낸 결과(예: 지금은 Claude에게 보내는 `dist/`나 줄 끝 공백 변경을 건너뛴 결과)를 다시 보여 주지 않기 위해서입니다.
+첫 화면의 "최근 분석" 목록도 이 폴더에서 읽습니다. 지우고 싶으면 폴더를 삭제하면 됩니다. 깊게 보기용 레포는 따로 `${XDG_CACHE_HOME:-~/.cache}/pr-lens/repos/`에 있습니다.
+
+## 개발
+
+```bash
+npm test          # vitest 단위 테스트
+npm run lint
+npm run typecheck # next typegen + tsc --noEmit
+npm run build
+```
+
+## 정확도 평가 (eval)
+
+"🔴 먼저 볼 것"이 실제 버그를 얼마나 잡는지 재는 스크립트입니다. 앱 서버 없이 같은 분석 코드(`src/lib`)를 그대로 씁니다.
+
+### 정답을 만드는 방법 (SZZ-lite)
+
+1. 레포의 최근 머지된 PR을 훑어, 제목·본문에 `fix`·`bug`·`regression`·`hotfix`가 있고 같은 레포의 다른 머지된 PR(B)을 `#123`이나 PR 링크로 참조하는 **수정 PR(F)** 을 찾습니다.
+   `fixture`·`FIXME`("remove FIXME" 등)는 수정 키워드로 치지 않습니다. 되돌리기(revert) PR, F보다 나중에 만들어진 PR을 참조한 경우, PR 템플릿의 체크 안 된 항목·HTML 주석은 제외합니다.
+2. B가 **추가한** 줄 중 F가 같은 경로에서 **지운** 줄(앞뒤 공백 무시)이 들어 있는 B의 hunk를 정답("버그 hunk")으로 표시합니다.
+   F가 파일 이름을 바꿨으면 예전 이름으로도 맞춰 봅니다. 8자 미만, 괄호만, import/export만, 주석만 있는 줄은 비교하지 않습니다. 락파일·빌드 결과물(생성 코드 경로)·스냅샷은 정답에서 뺍니다 (사람이 쓴 원본이 PR의 다른 곳에 있으므로).
+   hunk는 **내용 지문**(경로 + 바뀐 줄)으로 찾습니다. 앱이 물려받기·봤음에 쓰는 위치 키와는 별개라, `eval/cases.json`은 위치 키 도입 뒤에도 그대로 유효합니다.
+3. 정답 hunk가 1개 이상이고, 분석 대상 hunk의 50% 이하인 경우만 케이스로 남깁니다 (절반 넘게 정답이면 구분력이 없음).
+
+### 사용법
+
+```bash
+# 1) 케이스 수집 → eval/cases.json (기존 파일과 합치고 id로 중복 제거)
+npm run eval:collect -- --repo owner/name [--scan 300] [--max 30]
+
+# 2) 평가 실행 — 처음엔 작게
+npm run eval:run -- --mode fast --limit 3
+npm run eval:run -- [--mode deep|fast] [--limit N] [--concurrency 2] [--cases eval/cases.json]
+
+# 3) 마지막 두 실행 비교 (지표별 변화)
+npm run eval:report [-- --mode deep]
+```
+
+- `eval:run`은 케이스마다 B를 **처음부터 다시 분석**합니다 (캐시·이전 결과 상속 없음). 기본 모드는 앱과 같은 `deep`입니다.
+- 실행 결과는 `eval/runs/{시각}-{모드}.json`에 저장되고, 화면에는 지표 표와 케이스별 표(Markdown)가 나옵니다.
+- 앱의 "최근 분석" 목록과 섞이지 않도록 분석 캐시는 `.cache/eval/reviews/`에 저장합니다 (`PR_LENS_CACHE_DIR`를 이 폴더로 바꿔서 실행). deep 모드 레포는 앱과 같은 `${XDG_CACHE_HOME:-~/.cache}/pr-lens/repos/`를 쓰므로, 케이스가 많으면 앱에서 받아 둔 레포가 밀려날 수 있습니다(최근 5개 유지).
+- 같은 B를 고친 수정 PR이 여러 개면 케이스는 여러 개지만 분석은 한 번만 합니다.
+- 실행 중 Ctrl+C를 누르면 진행 중인 Claude 호출을 멈추고 그때까지의 결과를 저장합니다.
+- PR 제목·코드·오류 메시지를 터미널에 찍을 때는 제어 문자를 지웁니다 (PR 내용으로 터미널 화면을 조작하지 못하게).
+
+### 지표
+
+| 지표 | 뜻 |
+| --- | --- |
+| caseRecall@must | 정답 hunk 중 하나라도 🔴 must에 들어간 케이스 비율. 핵심 지표 |
+| caseRecall@must+should | 정답 hunk 중 하나라도 🔴 또는 🟡에 들어간 케이스 비율 |
+| hunkRecall@must | 전체 정답 hunk 중 🔴 must로 분류된 비율 |
+| mustRate | 케이스별 (must 개수 ÷ 분석 대상 hunk 수)의 평균. 낮을수록 강하게 거른 것. 전부 must로 찍으면 recall은 100%가 되므로 recall과 함께 봐야 합니다 |
+| firstHitRank | 추천 읽기 순서(must·should)에서 처음 나오는 정답 hunk의 순위 평균 (1부터). 순서에 정답이 없는 케이스는 빠지고, 표본 수를 `n=`으로 표시 |
+| noiseMisses | Claude에게 가지 않은 파일(⚫ 건너뛰어도 됨, 🟣 확인 필요)에 있던 정답 hunk 수. Claude가 보지도 못한 버그이므로 0이어야 합니다 |
+| unclassified | Claude에게 보냈지만 Claude가 분류하지 않은(AI 미분류) 정답 hunk 수 |
+| 총 비용 / 총 분석 시간 | CLI가 알려 주는 비용과 케이스별 분석 시간의 합 |
+
+케이스별 표의 "정답 hunk 위치"는 `must`·`should`·`skim`(Claude 분류), `unclassified`(보냈지만 Claude가 분류 안 함 — 앱에서는 "AI 미분류" 카드), `noise`(노이즈 필터가 거름), `omitted`(너무 커서 Claude에게 못 보냄), `missing`(수집 때의 hunk를 지금 PR에서 못 찾음 — 채점에서 빠짐) 중 하나입니다.
+`unclassified`가 생기기 전에 저장된 실행은 이런 hunk를 `skim`으로 기록했습니다.
+`eval:report`는 저장된 케이스별 결과로 지표를 다시 계산하므로, 지표 계산을 고친 뒤에도 예전 실행과 비교할 수 있습니다. 두 실행의 케이스 구성이 다르면 경고합니다.
+
+### 주의
+
+- **자동 라벨은 노이즈가 많습니다.** F가 지운 줄이 꼭 버그는 아닙니다 (수정하면서 리팩터링, 같은 줄을 다른 이유로 고침 등). 수집 뒤 몇 개는 B와 F를 직접 열어 정답 hunk가 그럴듯한지 확인하세요.
+- **지워진 줄이 버그인 경우는 못 잡습니다.** B가 필요한 검사를 지웠고 F가 되살린 경우처럼, B가 추가한 줄이 없으면 정답이 생기지 않습니다.
+- **유명 레포는 모델 학습 데이터에 PR과 수정 내역이 들어 있을 수 있어** 점수가 부풀 수 있습니다. 덜 알려진 레포나 내 레포를 권장합니다.
+- **`eval:run`은 내 Claude 플랜 사용량을 씁니다.** PR마다 Claude를 한 번 호출하고, deep 모드는 레포를 읽는 만큼 더 듭니다. `--limit`으로 작게 시작하세요.
+- 수집은 GitHub REST API만 씁니다 (검색 API 안 씀): PR 100개당 목록 호출 1번에, 후보마다 몇 번씩. 한도에 걸리면 그때까지 찾은 케이스를 저장하고 멈춥니다.

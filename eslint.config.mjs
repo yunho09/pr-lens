@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Review cache and downloaded PR checkouts (third-party code).
+    ".cache/**",
   ]),
 ]);
 

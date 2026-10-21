@@ -1,0 +1,119 @@
+[
+  {
+    "id": "honojs/hono#5236-fix#5243",
+    "repo": "honojs/hono",
+    "pr": 5236,
+    "prUrl": "https://github.com/honojs/hono/pull/5236",
+    "title": "fix(trie-router): match suffix wildcard routes",
+    "headSha": "7c7958f015f8206128aa28550f809fdd03623767",
+    "fixPr": 5243,
+    "fixUrl": "https://github.com/honojs/hono/pull/5243",
+    "fixTitle": "fix(router): support a wildcard in the middle of a path",
+    "keptHunks": 9,
+    "buggy": [
+      {
+        "path": "src/router/trie-router/node.ts",
+        "fingerprint": "51c9153850746e23ecee2aaa1de698d4a2bc267a",
+        "sample": "const pattern =",
+        "header": "@@ -14,74 +14,50 @@ type HandlerParamsSet<T> = HandlerSet<T> & {",
+        "kept": true
+      },
+      {
+        "path": "src/router/trie-router/node.ts",
+        "fingerprint": "39fa4995d15d9b1d2b699df5339c2d19e126d415",
+        "sample": "if (pattern === '*') {",
+        "header": "@@ -146,41 +117,40 @@ export class Node<T> {",
+        "kept": true
+      }
+    ],
+    "collectedAt": "2026-10-20T16:20:33.719Z"
+  },
+  {
+    "id": "honojs/hono#4329-fix#5488",
+    "repo": "honojs/hono",
+    "pr": 4329,
+    "prUrl": "https://github.com/honojs/hono/pull/4329",
+    "title": "fix(router): support `/files/:name{.*}`",
+    "headSha": "7181a13b1b633f95a20999e88454715647b87055",
+    "fixPr": 5488,
+    "fixUrl": "https://github.com/honojs/hono/pull/5488",
+    "fixTitle": "fix(reg-exp-router): reject param patterns that can match an empty string",
+    "keptHunks": 5,
+    "buggy": [
+      {
+        "path": "src/router/reg-exp-router/node.ts",
+        "fingerprint": "d6be93cc0f30099117654c9e959356a0bbc5a762",
+        "sample": "if (regexpStr === '.*') {",
+        "header": "@@ -81,6 +81,9 @@ export class Node {",
+        "kept": true
+      }
+    ],
+    "collectedAt": "2026-10-20T16:20:39.742Z"
+  },
+  {
+    "id": "honojs/hono#4267-fix#5297",
+    "repo": "honojs/hono",
+    "pr": 4267,
+    "prUrl": "https://github.com/honojs/hono/pull/4267",
+    "title": "fix(client): remove `index` string when calling `$url()`",
+    "headSha": "bb16241b3c97120c979f6371c4d93e20e17b5852",
+    "fixPr": 5297,
+    "fixUrl": "https://github.com/honojs/hono/pull/5297",
+    "fixTitle": "fix(client): keep a param value of \"index\" in $url() and $path()",
+    "keptHunks": 2,
+    "buggy": [
+      {
+        "path": "src/client/client.ts",
+        "fingerprint": "7d1a3ff6f9e07f531f9ed68fffc4a1611f8fc54f",
+        "sample": "result = removeIndexString(result)",
+        "header": "@@ -166,6 +166,7 @@ export const hc = <T extends Hono<any, any, any>>(",
+        "kept": true
+      }
+    ],
+    "collectedAt": "2026-10-20T16:20:57.019Z"
+  },
+  {
+    "id": "honojs/hono#5236-fix#5237",
+    "repo": "honojs/hono",
+    "pr": 5236,
+    "prUrl": "https://github.com/honojs/hono/pull/5236",
+    "title": "fix(trie-router): match suffix wildcard routes",
+    "headSha": "7c7958f015f8206128aa28550f809fdd03623767",
+    "fixPr": 5237,
+    "fixUrl": "https://github.com/honojs/hono/pull/5237",
+    "fixTitle": "refactor: Reduce TrieRouter bundle size without a meaningful performance regression",
+    "keptHunks": 9,
+    "buggy": [
+      {
+        "path": "src/router/trie-router/node.ts",
+        "fingerprint": "3633c9299905f9056406162c88d2b93163ede3f9",
+        "sample": "for (let i = 0, len = handlerSet.possibleKeys.length; i < len; i++) {",
+        "header": "@@ -94,18 +70,13 @@ export class Node<T> {",
+        "kept": true
+      }
+    ],
+    "collectedAt": "2026-10-20T16:21:07.785Z"
+  },
+  {
+    "id": "honojs/hono#5205-fix#5239",
+    "repo": "honojs/hono",
+    "pr": 5205,
+    "prUrl": "https://github.com/honojs/hono/pull/5205",
+    "title": "fix(etag): stabilize digest across stream chunks",
+    "headSha": "15eb50bf39e4e93ae13514f735353140f257f911",
+    "fixPr": 5239,
+    "fixUrl": "https://github.com/honojs/hono/pull/5239",
+    "fixTitle": "fix(etag): copy pending stream bytes",
+    "keptHunks": 4,
+    "buggy": [
+      {
+        "path": "src/middleware/etag/digest.ts",
+        "fingerprint": "9e76ce82e5a2a24dc8f4fd86cf10dbc9977b60a9",
+        "sample": "chunk = value.subarray(offset)",
+        "header": "@@ -30,7 +38,51 @@ export const generateDigest = async (",
+        "kept": true
+      }
+    ],
+    "collectedAt": "2026-10-20T16:21:09.857Z"
+  }
+]
