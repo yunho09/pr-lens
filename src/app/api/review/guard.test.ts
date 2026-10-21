@@ -40,11 +40,15 @@ describe("checkReviewRequest", () => {
 
 describe("shouldAutoStart (Sec-Fetch-Site / Sec-Fetch-Dest of the review page request)", () => {
   it.each([
-    [null, null, true],
-    ["none", null, true],
-    ["none", "document", true],
     ["same-origin", "document", true],
     ["same-origin", "empty", true], // the app's own client-side navigation (RSC fetch)
+    ["same-origin", null, true],
+    // Typed URL, bookmark, desktop-app link (Discord/Slack/mail): indistinguishable, so wait for a click.
+    ["none", "document", false],
+    ["none", null, false],
+    // No Fetch Metadata at all (old browser or non-browser client).
+    [null, null, false],
+    [null, "document", false],
     ["same-site", "document", false],
     ["cross-site", "document", false],
     ["cross-site", null, false],

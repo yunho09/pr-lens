@@ -225,7 +225,8 @@ function ReviewSession({ owner, repo, number, mode, refresh, cacheOnly, onRefres
       {state.status === "idle" && (
         <section className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4 sm:flex-row sm:items-center">
           <p className="flex-1 text-sm text-ink">
-            다른 사이트에 있는 링크로 열어서 자동으로 분석하지 않았습니다. PR을 확인한 뒤 시작하세요.
+            앱 밖(주소창·북마크·다른 앱이나 사이트의 링크)에서 열어서 자동으로 분석하지 않았습니다. PR을 확인한 뒤
+            시작하세요.
           </p>
           <button
             type="button"

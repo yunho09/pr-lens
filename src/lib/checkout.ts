@@ -148,7 +148,7 @@ export async function inspectTarball(
 /**
  * Extracts a GitHub tarball (one top-level directory) into a new directory
  * after checking its uncompressed size, then strips symlinks and other
- * non-regular files.
+ * non-regular files, and the search-ignore files a PR could use to hide code.
  */
 export async function extractTarball(
   tarPath: string,
@@ -163,6 +163,22 @@ export async function extractTarball(
     maxBuffer: 16 * 1024 * 1024,
   });
   await removeNonRegularFiles(destDir);
+  await removeSearchIgnoreFiles(destDir);
+}
+
+/**
+ * ripgrep (Claude's Grep/Glob) honours `.ignore` and `.rgignore` even outside
+ * a git repo, so a PR could hide files from deep-mode search with them.
+ * `.gitignore` needs a .git directory, which a tarball checkout never has.
+ * Returns how many were removed.
+ */
+export async function removeSearchIgnoreFiles(root: string): Promise<number> {
+  const { stdout } = await execFileP(
+    "find",
+    [root, "-type", "f", "(", "-name", ".ignore", "-o", "-name", ".rgignore", ")", "-printf", ".", "-delete"],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+  return stdout.length;
 }
 
 async function downloadTarball(url: string, dest: string, maxBytes: number, signal?: AbortSignal): Promise<void> {
