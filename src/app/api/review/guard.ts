@@ -51,22 +51,22 @@ export function checkReviewRequest(headers: Headers): GuardResult {
 
 /**
  * Whether the review page may start a (paid) analysis on load: only when the
- * user got there themselves and the page is loaded as a top-level document.
+ * user got there from inside this app (the home form or the recent list).
  *
- * Sec-Fetch-Site: a typed URL or bookmark ("none", or no header) or a link
- * inside this app ("same-origin"). A link on another site, or on another
- * local app on a different port ("same-site"), never auto-starts.
+ * Sec-Fetch-Site must be "same-origin". A typed URL, a bookmark or a link
+ * clicked in a desktop app (Discord, Slack, mail) all arrive as "none", and a
+ * browser without Fetch Metadata sends nothing, so none of those can be told
+ * apart from an attacker's link: they show the cached result or wait for a
+ * click on 분석 시작. Other sites and other local ports never auto-start.
  *
- * Sec-Fetch-Dest: "document" or absent. The one exception is "empty" with
- * "same-origin": that is this app's own client-side navigation (RSC fetch),
- * which only our own pages can make. Frames, objects and embeds never start.
+ * Sec-Fetch-Dest: "document", "empty" (this app's client-side navigation, an
+ * RSC fetch) or absent. Frames, objects and embeds never start.
  */
 export function shouldAutoStart(secFetchSite: string | null, secFetchDest: string | null = null): boolean {
   const site = secFetchSite?.trim().toLowerCase() ?? null;
   const dest = secFetchDest?.trim().toLowerCase() ?? null;
-  const trustedSite = site === null || site === "none" || site === "same-origin";
-  const topLevel = dest === null || dest === "document" || (dest === "empty" && site === "same-origin");
-  return trustedSite && topLevel;
+  const topLevel = dest === null || dest === "document" || dest === "empty";
+  return site === "same-origin" && topLevel;
 }
 
 /** Sent on every response (next.config.ts headers and proxy.ts rejections). */

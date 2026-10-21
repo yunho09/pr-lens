@@ -16,6 +16,7 @@ import {
   lockFilePath,
   parseListingSize,
   removeNonRegularFiles,
+  removeSearchIgnoreFiles,
 } from "./checkout";
 
 const execFileP = promisify(execFile);
@@ -81,6 +82,21 @@ describe("removeNonRegularFiles", () => {
   });
 });
 
+describe("removeSearchIgnoreFiles", () => {
+  it("deletes .ignore and .rgignore at any depth, keeps .gitignore and look-alikes", async () => {
+    const root = path.join(tmp, "repo");
+    await mkdir(path.join(root, "src/deep"), { recursive: true });
+    await writeFile(path.join(root, ".ignore"), "src/auth.ts\n");
+    await writeFile(path.join(root, "src/deep/.rgignore"), "*\n");
+    await writeFile(path.join(root, ".gitignore"), "node_modules\n");
+    await writeFile(path.join(root, "src/x.ignore"), "x");
+    await writeFile(path.join(root, "src/auth.ts"), "a");
+
+    expect(await removeSearchIgnoreFiles(root)).toBe(2);
+    expect(await listTree(root)).toEqual([".gitignore", "src/", "src/auth.ts", "src/deep/", "src/x.ignore"]);
+  });
+});
+
 describe("inspectTarball / extractTarball", () => {
   async function makeTarball(build: (top: string) => Promise<void>): Promise<string> {
     const top = path.join(tmp, "src", "owner-repo-abc123");
@@ -97,6 +113,8 @@ describe("inspectTarball / extractTarball", () => {
       await writeFile(path.join(top, "lib/index.ts"), "export {};\n");
       await symlink("/etc/hostname", path.join(top, "lib/secret.ts"));
       await symlink("../../../../../../etc", path.join(top, "etc-dir"));
+      await writeFile(path.join(top, ".ignore"), "lib/\n");
+      await writeFile(path.join(top, "lib/.rgignore"), "*\n");
     });
 
     const dest = path.join(tmp, "out");
