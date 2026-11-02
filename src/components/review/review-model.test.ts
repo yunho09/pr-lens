@@ -15,6 +15,7 @@ import {
   NO_ACTIVITY,
   priorityCounts,
   pushActivity,
+  isRepeatNavigation,
 } from "./review-model";
 
 function item(hunkId: string, priority: Priority, isNew = false): TriageItem {
@@ -426,5 +427,38 @@ describe("areaTarget", () => {
     expect(areaTarget(row({ unanalyzed: 1 }), plan, 0)).toBeNull();
     expect(areaTarget(row({ firstHunkIds: ["old"], should: 1 }), plan, 1)).toBeNull();
     expect(areaTarget(row({}), plan, 1)).toBeNull();
+  });
+});
+
+describe("isRepeatNavigation", () => {
+  const url = "http://127.0.0.1:3000/review/o/r/1";
+
+  it("treats a reload of this page as a repeat", () => {
+    expect(isRepeatNavigation({ type: "reload", name: url }, url)).toBe(true);
+  });
+
+  it("treats back/forward to this page as a repeat", () => {
+    expect(isRepeatNavigation({ type: "back_forward", name: url }, url)).toBe(true);
+  });
+
+  it("does not treat a fresh document load as a repeat", () => {
+    expect(isRepeatNavigation({ type: "navigate", name: url }, url)).toBe(false);
+  });
+
+  it("does not count a reload of another page, then an in-app move here", () => {
+    expect(isRepeatNavigation({ type: "reload", name: "http://127.0.0.1:3000/" }, url)).toBe(false);
+  });
+
+  it("ignores the fragment when comparing addresses", () => {
+    expect(isRepeatNavigation({ type: "reload", name: url }, `${url}#card-f0h0`)).toBe(true);
+    expect(isRepeatNavigation({ type: "reload", name: `${url}#card-f0h0` }, url)).toBe(true);
+  });
+
+  it("keeps the query significant", () => {
+    expect(isRepeatNavigation({ type: "reload", name: `${url}?mode=fast` }, url)).toBe(false);
+  });
+
+  it("is false when the browser reports no navigation entry", () => {
+    expect(isRepeatNavigation(undefined, url)).toBe(false);
   });
 });

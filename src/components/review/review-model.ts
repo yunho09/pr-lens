@@ -218,6 +218,18 @@ export interface ActivityState {
 
 export const NO_ACTIVITY: ActivityState = { recent: [], files: [], searches: 0, total: 0 };
 
+/**
+ * This document is a reload or back/forward of the given address. The server cannot tell: Chrome sends
+ * Sec-Fetch-Site: same-origin on a reload even when the page was first opened from another site.
+ * The entry belongs to the document, so after an in-app move to another page the addresses differ. Coming
+ * back to the reloaded address in-app also counts as a repeat, which only costs one click on 분석 시작.
+ */
+export function isRepeatNavigation(entry: { type: string; name: string } | undefined, href: string): boolean {
+  if (!entry || entry.type === "navigate") return false;
+  const withoutFragment = (url: string) => url.split("#")[0];
+  return withoutFragment(entry.name) === withoutFragment(href);
+}
+
 export function pushActivity(state: ActivityState, activity: Activity, keep = 20): ActivityState {
   const seq = state.total + 1;
   const isRead = activity.tool === "Read";
