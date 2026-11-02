@@ -29,8 +29,33 @@ export function blobUrl(meta: PrMeta, entry: Pick<LookAt, "path" | "line">): str
   return `https://github.com/${meta.owner}/${meta.repo}/blob/${meta.headSha}/${encoded}${entry.line > 0 ? `#L${entry.line}` : ""}`;
 }
 
-export function lookAtLabel(entry: Pick<LookAt, "path" | "line">): string {
-  return entry.line > 0 ? `${entry.path}:${entry.line}` : entry.path;
+export interface InlineSegment {
+  kind: "text" | "code";
+  value: string;
+}
+
+/**
+ * Splits prose into plain text and `code` spans. A backtick with no partner, or
+ * a pair with nothing inside, stays in the text as written.
+ */
+export function splitInlineCode(text: string): InlineSegment[] {
+  const segments: InlineSegment[] = [];
+  let pending = "";
+  let last = 0;
+  for (const match of text.matchAll(/`([^`]*)`/g)) {
+    pending += text.slice(last, match.index);
+    last = match.index + match[0].length;
+    if (match[1].trim() === "") {
+      pending += match[0];
+      continue;
+    }
+    if (pending) segments.push({ kind: "text", value: pending });
+    pending = "";
+    segments.push({ kind: "code", value: match[1] });
+  }
+  pending += text.slice(last);
+  if (pending) segments.push({ kind: "text", value: pending });
+  return segments;
 }
 
 /** "10/21 14:03" in local time, for the incremental banner. */

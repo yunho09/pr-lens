@@ -11,10 +11,11 @@ import {
   toggleSeenKey,
 } from "@/lib/seen";
 import type { Hunk, PrData, PrFile, ReviewResult, TriageItem } from "@/lib/types";
-import { NoiseList, OmittedCard, UnavailableList, type OmittedEntry } from "./FileLists";
+import { FallbackList, NoiseList, OmittedCard, UnavailableList, type FallbackEntry, type OmittedEntry } from "./FileLists";
 import { IncrementalBanner } from "./IncrementalBanner";
 import { ItemCard } from "./ItemCard";
-import { buildReadingPlan, defaultOnlyNew } from "./review-model";
+import { PrOverview } from "./PrOverview";
+import { buildReadingPlan, defaultOnlyNew, type JumpTarget } from "./review-model";
 import { RoutePanel } from "./RoutePanel";
 import { Section } from "./Section";
 
@@ -44,9 +45,35 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-function scrollToCard(hunkId: string) {
-  document.getElementById(`card-${hunkId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+/**
+ * Focus for a keyboard jump. The tabindex lasts only as long as the focus: a
+ * permanent one would take mouse focus away from the diff, and ←/→ would stop
+ * panning it. A click inside has to release it too, or focus would stay here.
+ */
+function focusUntilLeft(element: HTMLElement) {
+  element.setAttribute("tabindex", "-1");
+  const done = new AbortController();
+  const release = () => {
+    element.removeAttribute("tabindex");
+    done.abort();
+  };
+  element.addEventListener("blur", release, { signal: done.signal });
+  element.addEventListener("pointerdown", release, { signal: done.signal });
+  // preventScroll: a plain focus() would cancel the smooth scroll started by reveal.
+  element.focus({ preventScroll: true });
 }
+
+/** Scrolls to an element and moves focus there, so the next Tab continues from it. */
+function reveal(element: HTMLElement | null) {
+  if (!element) return;
+  // An explicit "smooth" would override the reduced-motion rule in globals.css.
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  element.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  focusUntilLeft(element);
+}
+
+const revealCard = (hunkId: string) => reveal(document.getElementById(`card-${hunkId}`));
+const revealAttention = () => reveal(document.getElementById("section-attention"));
 
 interface ReviewBodyProps {
   pr: PrData;
@@ -77,7 +104,11 @@ export function ReviewBody({ pr, result }: ReviewBodyProps) {
     const found = hunks.get(omitted.hunkId);
     return found ? [{ omitted, ...found }] : [];
   });
-  const attentionCount = unavailableFiles.length + omittedEntries.length;
+  const fallbackEntries: FallbackEntry[] = result.items.flatMap((item) => {
+    const found = item.source === "fallback" ? hunks.get(item.hunkId) : undefined;
+    return found ? [{ item, ...found }] : [];
+  });
+  const attentionCount = unavailableFiles.length + fallbackEntries.length + omittedEntries.length;
 
   const [open, setOpen] = useState({ must: true, should: true, skim: false, noise: false, attention: true });
   const toggle = (key: keyof typeof open) => setOpen((o) => ({ ...o, [key]: !o[key] }));
@@ -116,11 +147,22 @@ export function ReviewBody({ pr, result }: ReviewBodyProps) {
     setActiveId(hunkId);
     if (priority && !open[priority]) {
       setOpen((o) => ({ ...o, [priority]: true }));
-      requestAnimationFrame(() => scrollToCard(hunkId));
+      requestAnimationFrame(() => revealCard(hunkId));
     } else {
-      scrollToCard(hunkId);
+      revealCard(hunkId);
     }
   };
+
+  const jumpToAttention = () => {
+    if (open.attention) {
+      revealAttention();
+    } else {
+      setOpen((o) => ({ ...o, attention: true }));
+      requestAnimationFrame(revealAttention);
+    }
+  };
+
+  const jump = (target: JumpTarget) => (target.kind === "card" ? jumpTo(target.hunkId) : jumpToAttention());
 
   const onKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target)) return;
@@ -185,6 +227,8 @@ export function ReviewBody({ pr, result }: ReviewBodyProps) {
 
   return (
     <div className="flex flex-col gap-6">
+      <PrOverview result={result} files={pr.files} plan={plan} attentionCount={attentionCount} onJump={jump} />
+
       {result.previous && (
         <IncrementalBanner
           previous={result.previous}
@@ -200,7 +244,6 @@ export function ReviewBody({ pr, result }: ReviewBodyProps) {
           <RoutePanel
             steps={plan.steps}
             hunks={hunks}
-            meta={meta}
             seen={seen}
             activeId={activeId}
             onlyNew={onlyNew}
@@ -274,6 +317,7 @@ export function ReviewBody({ pr, result }: ReviewBodyProps) {
               onToggle={() => toggle("attention")}
             >
               {unavailableFiles.length > 0 && <UnavailableList files={unavailableFiles} meta={meta} />}
+              {fallbackEntries.length > 0 && <FallbackList entries={fallbackEntries} onJump={jumpTo} />}
               {omittedEntries.map((entry) => (
                 <OmittedCard key={entry.omitted.hunkId} entry={entry} meta={meta} />
               ))}

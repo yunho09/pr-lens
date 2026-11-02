@@ -28,65 +28,69 @@ export function PrHeader({ owner, repo, number, meta, result, running, mode, onM
           PR Lens
         </Link>
         <span className="mx-1.5 text-ink-subtle">/</span>
-        <span className="break-all">
+        <span>
           {owner}/{repo}
         </span>
       </nav>
 
-      <h1 className="mt-1 text-xl font-semibold leading-snug text-ink">
-        {meta ? meta.title : "PR 정보를 불러오는 중…"}{" "}
-        <span className="font-normal text-ink-subtle">#{number}</span>
-      </h1>
+      {/* Source order is the narrow-screen order; wide screens lift the actions onto the title row. */}
+      <div className="mt-1 grid grid-cols-1 gap-y-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-x-6">
+        <h1 className="min-w-0 text-xl font-semibold leading-snug text-ink lg:col-start-1 lg:row-start-1">
+          {meta ? meta.title : "PR 정보를 불러오는 중…"}{" "}
+          <span className="font-normal text-ink-subtle">#{number}</span>
+        </h1>
 
-      {meta && (
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-muted">
-          <span>@{meta.author}</span>
-          <span className="min-w-0 break-all font-mono text-xs">
-            {meta.baseRef} ← {meta.headRef}
-          </span>
-          <span className="font-mono text-xs">
-            <span className="text-ok">+{meta.additions}</span> <span className="text-danger">−{meta.deletions}</span>
-          </span>
-          <span>파일 {meta.changedFiles}개</span>
-          <span className="font-mono text-xs text-ink-subtle">{meta.headSha.slice(0, 7)}</span>
+        {meta && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-muted lg:col-span-2">
+            <span>@{meta.author}</span>
+            <span className="min-w-0 font-mono text-xs">
+              {meta.baseRef} ← {meta.headRef}
+            </span>
+            <span className="font-mono text-xs">
+              <span className="text-ok">+{meta.additions}</span> <span className="text-danger">−{meta.deletions}</span>
+            </span>
+            <span>파일 {meta.changedFiles}개</span>
+            <span className="font-mono text-xs text-ink-subtle">{meta.headSha.slice(0, 7)}</span>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 lg:col-start-2 lg:row-start-1 lg:justify-end">
+          <a
+            href={meta?.htmlUrl ?? `https://github.com/${owner}/${repo}/pull/${number}`}
+            target="_blank"
+            rel="noreferrer"
+            className={BUTTON}
+          >
+            GitHub에서 보기 ↗
+          </a>
+          <button type="button" onClick={onRefresh} disabled={running} className={BUTTON}>
+            다시 분석
+          </button>
+          <label
+            className={`inline-flex h-9 items-center gap-2 rounded-md border border-line px-3 text-sm text-ink ${
+              running ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-surface-2"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={mode === "deep"}
+              disabled={running}
+              onChange={(e) => onModeChange(e.target.checked ? "deep" : "fast")}
+              className="h-4 w-4 accent-[var(--accent)]"
+            />
+            깊게 보기 (주변 코드 읽기)
+          </label>
         </div>
-      )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <a
-          href={meta?.htmlUrl ?? `https://github.com/${owner}/${repo}/pull/${number}`}
-          target="_blank"
-          rel="noreferrer"
-          className={BUTTON}
-        >
-          GitHub에서 보기 ↗
-        </a>
-        <button type="button" onClick={onRefresh} disabled={running} className={BUTTON}>
-          다시 분석
-        </button>
-        <label
-          className={`inline-flex h-9 items-center gap-2 rounded-md border border-line px-3 text-sm text-ink ${
-            running ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-surface-2"
-          }`}
-        >
-          <input
-            type="checkbox"
-            checked={mode === "deep"}
-            disabled={running}
-            onChange={(e) => onModeChange(e.target.checked ? "deep" : "fast")}
-            className="h-4 w-4 accent-[var(--accent)]"
-          />
-          깊게 보기 (주변 코드 읽기)
-        </label>
         {result && (
-          <span className="text-xs text-ink-subtle">
+          <p className="text-xs text-ink-subtle lg:col-span-2">
             {result.cached ? "캐시된 결과 · " : ""}
             {result.mode === "deep" ? "깊게 · " : "빠르게 · "}
             {formatDateTime(result.analyzedAt)} 분석
             {duration ? ` · ${duration} 걸림` : ""}
             {result.toolCalls !== null ? ` · 도구 ${result.toolCalls}회` : ""}
             {cost ? ` · 비용 약 ${cost}` : ""}
-          </span>
+          </p>
         )}
       </div>
     </header>

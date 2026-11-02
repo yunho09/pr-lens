@@ -12,7 +12,7 @@
   --line-soft: #e6eaef;
   --ink: #1f2328;
   --ink-muted: #59636e;
-  --ink-subtle: #818b98;
+  --ink-subtle: #626b77;
 
   --accent: #0969da;
   --accent-soft: #ddf4ff;
@@ -32,20 +32,19 @@
   --attention-soft: #fbefff;
 
   --diff-add-bg: #e6ffec;
-  --diff-add-num: #ccffd8;
+  --diff-add-num: #dafbe2;
   --diff-add-strong: #abf2bc;
   --diff-del-bg: #ffebe9;
-  --diff-del-num: #ffd7d5;
+  --diff-del-num: #ffe5e2;
   --diff-del-strong: #ffc1bd;
-  --diff-hunk-bg: #ddf4ff;
   --diff-hl-mark: #bf8700;
   --diff-hl-ctx: #fff8c5;
 
   --focus: #0969da;
 
-  --font-sans-stack: system-ui, -apple-system, "Segoe UI", "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo",
+  --font-sans-stack: "Pretendard", system-ui, -apple-system, "Segoe UI", "Noto Sans KR", "Apple SD Gothic Neo",
     sans-serif;
-  --font-mono-stack: ui-monospace, "SFMono-Regular", "JetBrains Mono", "D2Coding", Menlo, Consolas,
+  --font-mono-stack: "D2Coding ligature", "D2Coding", ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 }
 
@@ -59,8 +58,8 @@
     --line: #3d444d;
     --line-soft: #262c34;
     --ink: #e6edf3;
-    --ink-muted: #9198a1;
-    --ink-subtle: #6e7681;
+    --ink-muted: #a8b1bb;
+    --ink-subtle: #8b949e;
 
     --accent: #4493f8;
     --accent-soft: #10243e;
@@ -80,12 +79,11 @@
     --attention-soft: #241a33;
 
     --diff-add-bg: #12261e;
-    --diff-add-num: #1a3a29;
+    --diff-add-num: #142a20;
     --diff-add-strong: #1f5133;
     --diff-del-bg: #2a1517;
-    --diff-del-num: #42201f;
+    --diff-del-num: #2f181a;
     --diff-del-strong: #5e2726;
-    --diff-hunk-bg: #121d2f;
     --diff-hl-mark: #e3b341;
     --diff-hl-ctx: #2b2410;
 
@@ -139,6 +137,24 @@ body {
   outline-offset: 2px;
 }
 
+/* A review tool must show != exactly as written, whatever the mono font ships. */
+.diff-table,
+.inline-code,
+.font-mono {
+  font-variant-ligatures: none;
+}
+
+.inline-code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  /* Translucent so it reads on the card and on the question box alike. */
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  font-family: var(--font-mono-stack);
+  font-size: 0.9em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
 /* ---------- Diff ---------- */
 
 .diff-scroll {
@@ -152,8 +168,8 @@ body {
   min-width: max-content;
   border-collapse: collapse;
   font-family: var(--font-mono-stack);
-  font-size: 12.5px;
-  line-height: 20px;
+  font-size: 13px;
+  line-height: 21px;
   tab-size: 4;
 }
 
@@ -188,8 +204,8 @@ body {
 }
 
 .diff-row-hunk td {
-  background: var(--diff-hunk-bg);
-  color: var(--ink-muted);
+  background: var(--surface-2);
+  color: var(--ink-subtle);
 }
 
 .diff-row-add td.diff-code {
@@ -223,10 +239,88 @@ body {
   color: var(--ink);
   font-weight: 600;
 }
+.diff-row-hl.diff-row-add td.diff-num {
+  background: var(--diff-add-strong);
+}
+.diff-row-hl.diff-row-del td.diff-num {
+  background: var(--diff-del-strong);
+}
+.diff-row-hl.diff-row-context td.diff-num {
+  background: var(--diff-hl-ctx);
+}
 
 .diff-eof {
   color: var(--ink-subtle);
   font-style: italic;
+}
+
+/* ---------- PR overview: 변경 영역 ---------- */
+
+.area-list {
+  container-type: inline-size;
+}
+
+/* Two lines when narrow (the bar gets the full width), one line when there is room. */
+.area-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    "label lines files counts"
+    "bar bar bar bar";
+  align-items: center;
+  gap: 4px 12px;
+}
+
+@container (min-width: 640px) {
+  .area-row {
+    grid-template-columns: minmax(0, 11rem) minmax(0, 1fr) 7.5rem 3.5rem 6.5rem;
+    grid-template-areas: "label bar lines files counts";
+  }
+}
+
+.area-label {
+  grid-area: label;
+}
+
+.area-track {
+  grid-area: bar;
+}
+
+.area-lines {
+  grid-area: lines;
+}
+
+.area-files {
+  grid-area: files;
+}
+
+.area-counts {
+  grid-area: counts;
+}
+
+.area-bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+}
+
+/* A part at zero draws nothing, and a tiny one stays visible. */
+.area-bar > * {
+  flex: 1 1 0;
+  min-width: 2px;
+}
+
+/* Square at the baseline, rounded at the data end. */
+.area-bar > :last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.area-add {
+  background: var(--ok);
+}
+
+.area-del {
+  background: var(--danger);
 }
 
 /* ---------- Review cards ---------- */
@@ -240,6 +334,35 @@ body {
   outline-offset: 2px;
 }
 
+.card-text {
+  max-width: 72ch;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* Wide screens: explanation beside the diff, and it stays in view beside a tall
+   hunk. The card uses overflow: clip for its rounded corners because overflow:
+   hidden would make it the scroll container and stop the column from sticking. */
+@media (min-width: 1600px) {
+  .card-layout[data-expanded] {
+    display: grid;
+    grid-template-columns: 420px minmax(0, 1fr);
+  }
+
+  .card-layout[data-expanded][data-tall-hunk] > .card-prose {
+    position: sticky;
+    top: 16px;
+    align-self: start;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+  }
+
+  .card-layout[data-expanded] > .diff-scroll {
+    border-top: 0;
+    border-left: 1px solid var(--line-soft);
+  }
+}
+
 .review-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -250,7 +373,7 @@ body {
    shows the first steps until "더 보기". */
 @media (min-width: 769px) {
   .review-grid {
-    grid-template-columns: 300px minmax(0, 1fr);
+    grid-template-columns: 280px minmax(0, 1fr);
   }
 
   .route-panel {

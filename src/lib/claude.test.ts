@@ -16,7 +16,7 @@ import {
 import { triageOutputSchema } from "./triage-schema";
 import type { Activity } from "./types";
 
-const valid = { summary: "요약", readingOrder: [], items: [] };
+const valid = { summary: "요약", changes: [], readingOrder: [], items: [] };
 
 function out(fields: Record<string, unknown>): string {
   return JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "", ...fields });
@@ -29,10 +29,12 @@ describe("toCliJsonSchema", () => {
     expect(schema.$schema).toBeUndefined();
     expect(text).not.toContain("minimum");
     expect(text).not.toContain("maximum");
-    expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["summary", "readingOrder", "items"] });
+    expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["summary", "changes", "readingOrder", "items"] });
     expect(text).toContain('"line":{"type":"integer"}');
     expect(text).toContain('"explain":{"type":"string"}');
     expect(text).toContain('"lookAt"');
+    expect(text).not.toContain('"default"');
+    expect(text).toContain('"hunkIds":{"type":"array","items":{"type":"string"}}');
   });
 });
 
@@ -61,6 +63,25 @@ describe("buildClaudeArgs", () => {
 });
 
 describe("parseClaudeOutput", () => {
+  it("keeps a finished analysis when the response lacks changes", () => {
+    const withoutChanges = { summary: "요약", readingOrder: [], items: [] };
+    const r = parseClaudeOutput(out({ structured_output: withoutChanges }), "", 0, triageOutputSchema);
+    expect(r.data).toEqual({ ...withoutChanges, changes: [] });
+  });
+
+  it.each([
+    ["null", null],
+    ["a string", "그룹"],
+    ["a group missing detail", [{ title: "t", hunkIds: ["f0h0"] }]],
+  ])("keeps a finished analysis when changes is %s", (_name, changes) => {
+    const r = parseClaudeOutput(out({ structured_output: { ...valid, summary: "남김", changes } }), "", 0, triageOutputSchema);
+    expect(r.data).toEqual({ ...valid, summary: "남김", changes: [] });
+  });
+
+  it("still rejects a response with a malformed required field", () => {
+    expect(() => parseClaudeOutput(out({ structured_output: { ...valid, items: "x" } }), "", 0, triageOutputSchema)).toThrow();
+  });
+
   it("returns validated structured_output with cost and duration", () => {
     const r = parseClaudeOutput(out({ structured_output: valid, total_cost_usd: 0.05, duration_ms: 1200 }), "", 0, triageOutputSchema);
     expect(r).toEqual({ data: valid, costUsd: 0.05, durationMs: 1200, toolCalls: 0, permissionDenials: 0 });

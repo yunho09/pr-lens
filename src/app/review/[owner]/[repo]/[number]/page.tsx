@@ -45,7 +45,7 @@ export default function ReviewPage({
 }) {
   // Params are request-time data under Cache Components, so they resolve inside Suspense.
   return (
-    <Suspense fallback={<p className="mx-auto w-full max-w-6xl px-4 py-6 text-sm text-ink-subtle">불러오는 중…</p>}>
+    <Suspense fallback={<p className="mx-auto w-full max-w-[2200px] px-4 py-6 text-sm text-ink-subtle sm:px-6">불러오는 중…</p>}>
       <ReviewRoute params={params} searchParams={searchParams} />
     </Suspense>
   );

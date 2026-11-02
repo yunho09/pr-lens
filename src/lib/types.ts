@@ -172,10 +172,19 @@ export interface ReviewDelta {
   reanalyzed?: number;
 }
 
+/** Hunks grouped by purpose: what the PR did, for the overview. */
+export interface ChangeGroup {
+  title: string;
+  detail: string;
+  hunkIds: string[];
+}
+
 export interface ReviewResult {
   /** Mode actually used (deep falls back to fast when the checkout fails). */
   mode: ReviewMode;
   summary: string;
+  /** Absent in results cached before groups existed; empty when there are none. */
+  changes?: ChangeGroup[];
   readingOrder: string[];
   items: TriageItem[];
   omitted: OmittedHunk[];

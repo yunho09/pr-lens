@@ -8,10 +8,10 @@ import { KeptFileList, NoiseList, UnavailableList } from "./FileLists";
 import { PrHeader } from "./PrHeader";
 import { ProgressPanel } from "./ProgressPanel";
 import { ReviewBody } from "./ReviewBody";
-import { NO_ACTIVITY, pushActivity, type ActivityState } from "./review-model";
+import { isRepeatNavigation, NO_ACTIVITY, pushActivity, type ActivityState } from "./review-model";
 
 interface SessionState {
-  /** "idle": opened from another site, no cached result; waiting for "분석 시작". */
+  /** "idle": opened from outside the app or reloaded, no cached result; waiting for "분석 시작". */
   status: "running" | "done" | "error" | "idle";
   stage: ReviewStage | null;
   stageMessage: string | null;
@@ -121,13 +121,24 @@ interface ReviewViewProps {
   repo: string;
   number: number;
   initialMode: ReviewMode;
-  /** False when the page was opened from another site: load only a cached result until the user clicks. */
+  /** False when the server saw no in-app navigation: load only a cached result until the user clicks. */
   autoStart?: boolean;
+}
+
+function isRepeatLoad(): boolean {
+  if (typeof window === "undefined") return false;
+  const [entry] = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+  return isRepeatNavigation(entry, window.location.href);
 }
 
 export function ReviewView({ initialMode, autoStart = true, ...props }: ReviewViewProps) {
   // A new run id remounts the session: fresh state and a new request.
-  const [run, setRun] = useState({ id: 0, mode: initialMode, refresh: false, cacheOnly: !autoStart });
+  const [run, setRun] = useState(() => ({
+    id: 0,
+    mode: initialMode,
+    refresh: false,
+    cacheOnly: !autoStart || isRepeatLoad(),
+  }));
 
   const changeMode = (mode: ReviewMode) => {
     setRun((r) => ({ id: r.id + 1, mode, refresh: false, cacheOnly: false }));
@@ -198,7 +209,7 @@ function ReviewSession({ owner, repo, number, mode, refresh, cacheOnly, onRefres
   const keptFiles = pr?.files.filter((f) => f.classification.kind === "keep" && f.hunks.length > 0) ?? [];
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6">
+    <main className="mx-auto flex w-full max-w-[2200px] flex-col gap-6 px-4 py-6 sm:px-6">
       <PrHeader
         owner={owner}
         repo={repo}
@@ -225,7 +236,7 @@ function ReviewSession({ owner, repo, number, mode, refresh, cacheOnly, onRefres
       {state.status === "idle" && (
         <section className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4 sm:flex-row sm:items-center">
           <p className="flex-1 text-sm text-ink">
-            앱 밖(주소창·북마크·다른 앱이나 사이트의 링크)에서 열어서 자동으로 분석하지 않았습니다. PR을 확인한 뒤
+            앱 밖(주소창·북마크·다른 앱이나 사이트의 링크)에서 열었거나 새로고침해서 자동으로 분석하지 않았습니다. PR을 확인한 뒤
             시작하세요.
           </p>
           <button
@@ -264,10 +275,6 @@ function ReviewSession({ owner, repo, number, mode, refresh, cacheOnly, onRefres
               </ul>
             </section>
           )}
-          <section className="rounded-lg border border-line bg-surface p-4">
-            <h2 className="text-sm font-semibold text-ink-muted">이 PR은</h2>
-            <p className="mt-1 leading-relaxed text-ink">{result.summary}</p>
-          </section>
           <ReviewBody key={`${pr.meta.headSha}:${result.mode}`} pr={pr} result={result} />
         </>
       )}

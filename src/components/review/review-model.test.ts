@@ -3,7 +3,20 @@ import { ghFile, makePr } from "@/test/fixtures";
 import type { RunClaude } from "@/lib/claude";
 import { triagePr } from "@/lib/triage";
 import type { Priority, TriageItem } from "@/lib/types";
-import { buildReadingPlan, defaultOnlyNew, NO_ACTIVITY, pushActivity } from "./review-model";
+import {
+  areaTarget,
+  buildAreaMap,
+  buildReadingPlan,
+  changesNote,
+  CHANGES_BEFORE_FEATURE,
+  CHANGES_NOT_RETURNED,
+  defaultOnlyNew,
+  firstRenderedHunk,
+  NO_ACTIVITY,
+  priorityCounts,
+  pushActivity,
+  isRepeatNavigation,
+} from "./review-model";
 
 function item(hunkId: string, priority: Priority, isNew = false): TriageItem {
   return {
@@ -179,5 +192,273 @@ describe("pushActivity", () => {
       [5, "Read"],
     ]);
     expect(NO_ACTIVITY.total).toBe(0);
+  });
+});
+
+describe("buildAreaMap", () => {
+  const patch = "@@ -1 +1 @@\n-a\n+b";
+  const file = (name: string, additions = 1, deletions = 1, filePatch: string | undefined = patch) =>
+    ghFile(name, filePatch, { additions, deletions, changes: additions + deletions });
+  const areas = (names: string[]) => buildAreaMap(makePr(names.map((n) => file(n))).files, []).map((r) => r.area);
+
+  it("uses the first path segment", () => {
+    expect(areas(["harness/api/a.json", "tests/e2e/a.spec.ts"])).toEqual(["harness", "tests"]);
+  });
+
+  it("uses two segments under a generic source root", () => {
+    expect(
+      areas(["src/components/a.ts", "packages/core/a.ts", "apps/web/a.ts", "app/api/a.ts", "lib/utils/a.ts"]),
+    ).toEqual(["src/components", "packages/core", "apps/web", "app/api", "lib/utils"]);
+  });
+
+  it("keeps a file directly under a generic root in that root", () => {
+    expect(areas(["src/index.ts", "lib/a.ts"])).toEqual(["src", "lib"]);
+  });
+
+  it("puts root-level files in (루트)", () => {
+    expect(areas(["README.md", "package.json"])).toEqual(["(루트)"]);
+  });
+
+  it("merges files of one area and sums their numbers", () => {
+    const pr = makePr([file("src/a/x.ts", 3, 1), file("src/a/y.ts", 4, 2), file("src/b/z.ts", 1, 0)]);
+    expect(buildAreaMap(pr.files, [])).toMatchObject([
+      { area: "src/a", fileCount: 2, additions: 7, deletions: 3 },
+      { area: "src/b", fileCount: 1, additions: 1, deletions: 0 },
+    ]);
+  });
+
+  it("counts skipped and unavailable files in the totals, with no jump target", () => {
+    const pr = makePr([
+      file("package-lock.json", 500, 400),
+      ghFile("assets/logo.bin", undefined, { additions: 0, deletions: 0, changes: 0, status: "modified" }),
+      file("src/a/x.ts", 1, 1),
+    ]);
+    expect(pr.files.map((f) => f.classification.kind)).toEqual(["skip", "unavailable", "keep"]);
+    const rows = buildAreaMap(pr.files, [item("f2h0", "must")]);
+    expect(rows.map((r) => [r.area, r.fileCount, r.additions + r.deletions, r.firstHunkIds, r.unanalyzed])).toEqual([
+      ["(루트)", 1, 900, [], 0],
+      ["src/a", 1, 2, ["f2h0"], 0],
+      ["assets", 1, 0, [], 1],
+    ]);
+  });
+
+  it("counts priorities and lists only hunks that have an item", () => {
+    const pr = makePr([file("src/a/x.ts", 1, 1, `${patch}\n@@ -9 +9 @@\n-c\n+d`), file("src/a/y.ts"), file("src/a/z.ts")]);
+    const [row] = buildAreaMap(pr.files, [item("f0h0", "must"), item("f0h1", "should"), item("f1h0", "skim")]);
+    expect(row).toMatchObject({ must: 1, should: 1, skim: 1, firstHunkIds: ["f0h0", "f0h1", "f1h0"] });
+  });
+
+  it("counts fallback items, omitted hunks and unavailable files as unanalyzed, never as skim", () => {
+    const pr = makePr([
+      file("src/a/x.ts", 1, 1, `${patch}\n@@ -9 +9 @@\n-c\n+d`),
+      file("src/a/omitted.ts"),
+      ghFile("src/a/logo.bin", undefined, { additions: 0, deletions: 0, changes: 0 }),
+      file("yarn.lock"),
+    ]);
+    expect(pr.files.map((f) => f.classification.kind)).toEqual(["keep", "keep", "unavailable", "skip"]);
+    const fallback = { ...item("f0h0", "skim"), source: "fallback" as const };
+    const rows = buildAreaMap(pr.files, [fallback, item("f0h1", "skim")]);
+    expect(rows.find((r) => r.area === "src/a")).toMatchObject({ skim: 1, unanalyzed: 3, firstHunkIds: ["f0h0", "f0h1"] });
+    // A skipped file is a rule's decision, shown in ⚫: not unanalyzed.
+    expect(rows.find((r) => r.area === "(루트)")).toMatchObject({ unanalyzed: 0 });
+  });
+
+  it("sorts by additions plus deletions, keeping PR order on a tie", () => {
+    const pr = makePr([file("b/x", 1, 1), file("a/x", 2, 0), file("c/x", 9, 9)]);
+    expect(buildAreaMap(pr.files, []).map((r) => r.area)).toEqual(["c", "b", "a"]);
+  });
+
+  const many = (n: number) => makePr(Array.from({ length: n }, (_, i) => file(`d${i}/x`, 100 - i, 0)));
+
+  it("keeps 8 areas as they are", () => {
+    const rows = buildAreaMap(many(8).files, []);
+    expect(rows).toHaveLength(8);
+    expect(rows[7].area).toBe("d7");
+  });
+
+  const allSkim = (n: number) => Array.from({ length: n }, (_, i) => item(`f${i}h0`, "skim"));
+
+  it("merges past 8 rows into one last row that keeps the totals honest", () => {
+    const pr = many(11);
+    const rows = buildAreaMap(pr.files, allSkim(11));
+    expect(rows).toHaveLength(8);
+    expect(rows.slice(0, 7).map((r) => r.area)).toEqual(["d0", "d1", "d2", "d3", "d4", "d5", "d6"]);
+    expect(rows[7]).toEqual({
+      area: "그 외 4개 영역",
+      mergedAreas: ["d7", "d8", "d9", "d10"],
+      fileCount: 4,
+      additions: 93 + 92 + 91 + 90,
+      deletions: 0,
+      must: 0,
+      should: 0,
+      skim: 4,
+      unanalyzed: 0,
+      firstHunkIds: ["f7h0", "f8h0", "f9h0", "f10h0"],
+    });
+    const sum = (key: "additions" | "fileCount") => rows.reduce((n, r) => n + r[key], 0);
+    expect(sum("additions")).toBe(pr.files.reduce((n, f) => n + f.additions, 0));
+    expect(sum("fileCount")).toBe(11);
+  });
+
+  it("keeps small sensitive areas out of the merged row, showing kept rows by size", () => {
+    const pr = many(11);
+    const items = allSkim(11);
+    items[10] = item("f10h0", "must");
+    items[9] = { ...item("f9h0", "skim"), source: "fallback" };
+    items[8] = item("f8h0", "should");
+    const rows = buildAreaMap(pr.files, items);
+    expect(rows.map((r) => r.area)).toEqual(["d0", "d1", "d2", "d3", "d8", "d9", "d10", "그 외 4개 영역"]);
+    expect(rows[7].mergedAreas).toEqual(["d4", "d5", "d6", "d7"]);
+  });
+
+  it("keeps the sensitive totals on the merged row when there are too many sensitive areas", () => {
+    const pr = many(11);
+    const rows = buildAreaMap(pr.files, Array.from({ length: 11 }, (_, i) => item(`f${i}h0`, "must")));
+    expect(rows).toHaveLength(8);
+    expect(rows.slice(0, 7).map((r) => r.area)).toEqual(["d0", "d1", "d2", "d3", "d4", "d5", "d6"]);
+    expect(rows[7]).toMatchObject({ must: 4, mergedAreas: ["d7", "d8", "d9", "d10"] });
+    expect(rows.reduce((n, r) => n + r.must, 0)).toBe(11);
+  });
+
+  it("ranks a small 🔴 area above larger 🟡 and 🟣 areas when too many areas are sensitive", () => {
+    const pr = many(11);
+    const items = Array.from({ length: 11 }, (_, i) => item(`f${i}h0`, "should"));
+    items[10] = item("f10h0", "must");
+    items[1] = { ...item("f1h0", "skim"), source: "fallback" };
+    const rows = buildAreaMap(pr.files, items);
+    expect(rows.map((r) => r.area)).toEqual(["d0", "d1", "d2", "d3", "d4", "d5", "d10", "그 외 4개 영역"]);
+    expect(rows[7]).toMatchObject({ must: 0, should: 4, mergedAreas: ["d6", "d7", "d8", "d9"] });
+  });
+
+  it("keeps 🟡 and 🟣 areas above areas with neither, by size among equals", () => {
+    const pr = many(11);
+    const items = allSkim(11);
+    items[9] = item("f9h0", "should");
+    items[10] = { ...item("f10h0", "skim"), source: "fallback" };
+    const rows = buildAreaMap(pr.files, items);
+    expect(rows.map((r) => r.area)).toEqual(["d0", "d1", "d2", "d3", "d4", "d9", "d10", "그 외 4개 영역"]);
+  });
+
+  it("has nothing to merge within 8 rows, so no merged names", () => {
+    expect(buildAreaMap(many(8).files, allSkim(8)).every((r) => r.mergedAreas === undefined)).toBe(true);
+  });
+});
+
+describe("firstRenderedHunk", () => {
+  const plan = buildReadingPlan(
+    {
+      readingOrder: ["m2", "m1", "s1"],
+      items: [item("m1", "must", true), item("m2", "must", true), item("s1", "should", true), item("k1", "skim", true), item("old", "skim")],
+    },
+    true,
+  );
+
+  it("picks the first card in reading order, priority first", () => {
+    expect(firstRenderedHunk(["k1", "s1", "m1", "m2"], plan)).toBe("m2");
+    expect(firstRenderedHunk(["k1", "s1"], plan)).toBe("s1");
+    expect(firstRenderedHunk(["k1"], plan)).toBe("k1");
+  });
+
+  it("ignores cards the filter hides, and returns null when none is left", () => {
+    expect(firstRenderedHunk(["old", "k1"], plan)).toBe("k1");
+    expect(firstRenderedHunk(["old"], plan)).toBeNull();
+    expect(firstRenderedHunk([], plan)).toBeNull();
+  });
+});
+
+describe("priorityCounts", () => {
+  it("counts the group's items by priority and ignores ids without one", () => {
+    const items = [item("a", "must"), item("b", "skim"), item("c", "skim"), item("d", "should")];
+    expect(priorityCounts(["a", "b", "c", "ghost"], items)).toEqual({ must: 1, should: 0, skim: 2, unanalyzed: 0 });
+  });
+
+  it("counts a fallback item as unanalyzed, not skim", () => {
+    const items = [item("a", "skim"), { ...item("b", "skim"), source: "fallback" as const }];
+    expect(priorityCounts(["a", "b"], items)).toEqual({ must: 0, should: 0, skim: 1, unanalyzed: 1 });
+  });
+});
+
+describe("changesNote", () => {
+  const items = [item("a", "must")];
+
+  it("says nothing when there are groups, or nothing to group", () => {
+    expect(changesNote({ changes: [{ title: "t", detail: "", hunkIds: ["a"] }], items })).toBeNull();
+    expect(changesNote({ changes: [], items: [] })).toBeNull();
+    expect(changesNote({ items: [] })).toBeNull();
+  });
+
+  it("explains a result made before groups existed: changes is undefined", () => {
+    expect(CHANGES_BEFORE_FEATURE).toBe("이 결과는 '한 일' 목록을 만들기 전에 분석했습니다. 다시 분석하면 볼 수 있습니다.");
+    expect(changesNote({ items })).toBe(CHANGES_BEFORE_FEATURE);
+  });
+
+  it("does not blame age for an empty list: nothing came back", () => {
+    expect(changesNote({ changes: [], items })).toBe(CHANGES_NOT_RETURNED);
+  });
+});
+
+describe("areaTarget", () => {
+  const fallback = { ...item("fb", "skim", true), source: "fallback" as const };
+  const plan = buildReadingPlan({ readingOrder: ["m"], items: [item("m", "must", true), item("k", "skim", true), fallback, item("old", "should")] }, true);
+  const row = (fields: Partial<Parameters<typeof areaTarget>[0]>) => ({ firstHunkIds: [], must: 0, should: 0, unanalyzed: 0, ...fields });
+
+  it("sends a row with 🔴 or 🟡 to its first card, whatever else it holds", () => {
+    expect(areaTarget(row({ firstHunkIds: ["k", "fb", "m"], must: 1, unanalyzed: 1 }), plan, 1)).toEqual({ kind: "card", hunkId: "m" });
+  });
+
+  it("sends a skim-only row to its first card", () => {
+    expect(areaTarget(row({ firstHunkIds: ["k"] }), plan, 1)).toEqual({ kind: "card", hunkId: "k" });
+  });
+
+  it("sends a row showing only 🟣 to its own fallback card, not an ordinary ⚪ card before it", () => {
+    expect(areaTarget(row({ firstHunkIds: ["k", "fb"], unanalyzed: 1 }), plan, 1)).toEqual({ kind: "card", hunkId: "fb" });
+  });
+
+  it("sends a row showing only 🟣 with no fallback card of its own to the 🟣 section", () => {
+    expect(areaTarget(row({ firstHunkIds: ["k"], unanalyzed: 1 }), plan, 1)).toEqual({ kind: "attention" });
+    expect(areaTarget(row({ unanalyzed: 1 }), plan, 1)).toEqual({ kind: "attention" });
+  });
+
+  it("sends a row whose 🟡 cards are filtered out to the 🟣 section when it also holds 🟣", () => {
+    expect(areaTarget(row({ firstHunkIds: ["old"], should: 1, unanalyzed: 1 }), plan, 1)).toEqual({ kind: "attention" });
+  });
+
+  it("has no target when the 🟣 section would be empty or the row has nothing on screen", () => {
+    expect(areaTarget(row({ unanalyzed: 1 }), plan, 0)).toBeNull();
+    expect(areaTarget(row({ firstHunkIds: ["old"], should: 1 }), plan, 1)).toBeNull();
+    expect(areaTarget(row({}), plan, 1)).toBeNull();
+  });
+});
+
+describe("isRepeatNavigation", () => {
+  const url = "http://127.0.0.1:3000/review/o/r/1";
+
+  it("treats a reload of this page as a repeat", () => {
+    expect(isRepeatNavigation({ type: "reload", name: url }, url)).toBe(true);
+  });
+
+  it("treats back/forward to this page as a repeat", () => {
+    expect(isRepeatNavigation({ type: "back_forward", name: url }, url)).toBe(true);
+  });
+
+  it("does not treat a fresh document load as a repeat", () => {
+    expect(isRepeatNavigation({ type: "navigate", name: url }, url)).toBe(false);
+  });
+
+  it("does not count a reload of another page, then an in-app move here", () => {
+    expect(isRepeatNavigation({ type: "reload", name: "http://127.0.0.1:3000/" }, url)).toBe(false);
+  });
+
+  it("ignores the fragment when comparing addresses", () => {
+    expect(isRepeatNavigation({ type: "reload", name: url }, `${url}#card-f0h0`)).toBe(true);
+    expect(isRepeatNavigation({ type: "reload", name: `${url}#card-f0h0` }, url)).toBe(true);
+  });
+
+  it("keeps the query significant", () => {
+    expect(isRepeatNavigation({ type: "reload", name: `${url}?mode=fast` }, url)).toBe(false);
+  });
+
+  it("is false when the browser reports no navigation entry", () => {
+    expect(isRepeatNavigation(undefined, url)).toBe(false);
   });
 });

@@ -52,6 +52,7 @@ export function toCliJsonSchema(schema: z.ZodType): Record<string, unknown> {
       const s = ctx.jsonSchema as Record<string, unknown>;
       if (s.minimum === -SAFE_INT) delete s.minimum;
       if (s.maximum === SAFE_INT) delete s.maximum;
+      delete s.default;
     },
   }) as Record<string, unknown>;
   delete json.$schema;

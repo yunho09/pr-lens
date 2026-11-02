@@ -256,6 +256,20 @@ describe("modes and incremental input", () => {
     expect(prompt).not.toContain('id="f0h0"');
     expect(prompt).toContain("- f0h0 src/a.ts [must] 이전 제목");
     expect(prompt).toMatch(/<previous_summary-([0-9a-f]+)>\n예전 요약\n<\/previous_summary-\1>/);
+    // The change groups must describe the whole PR, not only the hunks sent in this run.
+    expect(prompt).toMatch(/already_reviewed[\s\S]*put these hunks' ids in your changes groups/i);
+  });
+
+  it("asks for change groups by purpose, covering every id exactly once", () => {
+    const system = triageSystemPrompt("fast");
+    expect(system).toContain("changes:");
+    expect(system).toContain("Normally 2-6 groups");
+    expect(system).toContain("at most 30 characters");
+    expect(system).toContain("not a file or folder name");
+    expect(system).toContain("exactly one group");
+    expect(system).toContain("Never pad");
+    expect(system).toMatch(/<ids-SUFFIX>[^\n]*exactly one group/);
+    expect(system).toMatch(/hunkIds:[^\n]*<already_reviewed-SUFFIX>[^\n]*exactly one group/);
   });
 });
 
