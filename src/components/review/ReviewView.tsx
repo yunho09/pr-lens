@@ -198,7 +198,7 @@ function ReviewSession({ owner, repo, number, mode, refresh, cacheOnly, onRefres
   const keptFiles = pr?.files.filter((f) => f.classification.kind === "keep" && f.hunks.length > 0) ?? [];
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6">
+    <main className="mx-auto flex w-full max-w-[2200px] flex-col gap-6 px-4 py-6 sm:px-6">
       <PrHeader
         owner={owner}
         repo={repo}
@@ -264,10 +264,6 @@ function ReviewSession({ owner, repo, number, mode, refresh, cacheOnly, onRefres
               </ul>
             </section>
           )}
-          <section className="rounded-lg border border-line bg-surface p-4">
-            <h2 className="text-sm font-semibold text-ink-muted">이 PR은</h2>
-            <p className="mt-1 leading-relaxed text-ink">{result.summary}</p>
-          </section>
           <ReviewBody key={`${pr.meta.headSha}:${result.mode}`} pr={pr} result={result} />
         </>
       )}

@@ -27,8 +27,17 @@ export const triageItemSchema = z.object({
   ),
 });
 
+export const changeGroupSchema = z.object({
+  title: z.string(),
+  detail: z.string(),
+  hunkIds: z.array(z.string()),
+});
+
 export const triageOutputSchema = z.object({
   summary: z.string(),
+  // Required in the schema the CLI gets. The catch only keeps an otherwise
+  // finished, paid analysis if this one field comes back missing or malformed.
+  changes: z.array(changeGroupSchema).catch([]),
   readingOrder: z.array(z.string()),
   items: z.array(triageItemSchema),
 });

@@ -1,13 +1,18 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ghFile, makePr } from "@/test/fixtures";
 import {
   cacheDir,
   CACHE_VERSION,
+  findPrevious,
   isInheritanceSource,
   matchesBase,
   parseCacheEntry,
   pickPrevious,
+  readCache,
+  writeCache,
   type CacheEntry,
 } from "./cache";
 
@@ -93,6 +98,29 @@ describe("pickPrevious", () => {
     delete unanchored.pr.files[0].hunks[0].anchorKey;
     expect(isInheritanceSource(unanchored, "deep")).toBe(false);
     expect(pickPrevious([c, unanchored], "d".repeat(40), "deep")).toBe(c);
+  });
+});
+
+describe("entries written before change groups existed", () => {
+  it("stay readable and usable as a previous analysis, under the same cache version", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pr-lens-cache-"));
+    vi.stubEnv("PR_LENS_CACHE_DIR", dir);
+    try {
+      const old = entry("a".repeat(40), "fast", "2026-10-21T00:47:00.000Z");
+      expect(CACHE_VERSION).toBe(3);
+      expect("changes" in old.review).toBe(false);
+      await writeCache(old);
+
+      const read = await readCache(old.pr.meta, "fast");
+      expect(read?.review.changes).toBeUndefined();
+      expect(read?.review.summary).toBe("s");
+
+      const previous = await findPrevious({ ...old.pr.meta, headSha: "b".repeat(40) }, "fast");
+      expect(previous?.pr.meta.headSha).toBe("a".repeat(40));
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

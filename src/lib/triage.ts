@@ -6,6 +6,7 @@ import { triageOutputSchema, type TriageOutput } from "./triage-schema";
 import type {
   Activity,
   Category,
+  ChangeGroup,
   FileRole,
   HighlightRef,
   Hunk,
@@ -17,6 +18,10 @@ import type {
 import type { RunClaude } from "./claude";
 
 export const TITLE_MAX = 40;
+export const CHANGE_TITLE_MAX = 30;
+export const CHANGE_DETAIL_MAX = 200;
+export const MAX_CHANGE_GROUPS = 8;
+export const OTHER_CHANGES_TITLE = "그 밖의 변경";
 export const UNCLASSIFIED_WHY = "AI가 분류하지 않음";
 const MAX_HIGHLIGHTS = 10;
 
@@ -51,6 +56,40 @@ function clampHighlights(hunk: Hunk, highlights: HighlightRef[]): HighlightRef[]
   return out;
 }
 
+/**
+ * Validates Claude's groups against the hunks that have an item, then puts
+ * inherited hunks it left out back under their previous groups. Unless there is
+ * no valid group at all, every hunk ends up in exactly one group: a response
+ * must not be able to hide a hunk from the overview. The cap includes the catch-all.
+ */
+function mergeChanges(raw: ChangeGroup[], previous: ChangeGroup[], hunkIdsInDiffOrder: string[]): ChangeGroup[] {
+  const allowed = new Set(hunkIdsInDiffOrder);
+  const assigned = new Set<string>();
+  const groups: ChangeGroup[] = [];
+  const add = (group: ChangeGroup) => {
+    const hunkIds = group.hunkIds.filter((id) => {
+      if (!allowed.has(id) || assigned.has(id)) return false;
+      assigned.add(id);
+      return true;
+    });
+    if (hunkIds.length === 0) return;
+    groups.push({
+      title: truncate(group.title, CHANGE_TITLE_MAX) || "제목 없음",
+      detail: truncate(group.detail, CHANGE_DETAIL_MAX),
+      hunkIds,
+    });
+  };
+  raw.forEach(add);
+  // A previous catch-all is not a purpose: its hunks land in the one built below.
+  previous.filter((g) => g.title !== OTHER_CHANGES_TITLE).forEach(add);
+  if (groups.length === 0) return [];
+  if (groups.length <= MAX_CHANGE_GROUPS && assigned.size === allowed.size) return groups;
+
+  const kept = groups.slice(0, MAX_CHANGE_GROUPS - 1);
+  const placed = new Set(kept.flatMap((g) => g.hunkIds));
+  return [...kept, { title: OTHER_CHANGES_TITLE, detail: "", hunkIds: hunkIdsInDiffOrder.filter((id) => !placed.has(id)) }];
+}
+
 export interface MergeOptions {
   /** Where lookAt entries may point (see lookat.ts). */
   lookAt: LookAtContext;
@@ -58,20 +97,22 @@ export interface MergeOptions {
   inherited?: TriageItem[];
   /** Hunks with no counterpart in the previous analysis; null when there is no previous one. */
   newHunkIds?: Set<string> | null;
+  /** Previous change groups, already re-targeted to current hunk ids. */
+  previousChanges?: ChangeGroup[];
 }
 
 /**
  * Reconciles Claude's raw output with the hunks that were actually sent:
  * drops unknown/duplicate ids, fills in missing hunks as skim, clamps
  * highlight lines, validates lookAt, adds inherited items, and repairs
- * the reading order over everything.
+ * the reading order and the change groups over everything.
  */
 export function mergeTriage(
   pr: PrData,
   includedHunkIds: string[],
-  raw: TriageOutput,
+  raw: Omit<TriageOutput, "changes"> & Partial<Pick<TriageOutput, "changes">>,
   options: MergeOptions,
-): Pick<TriageReview, "summary" | "readingOrder" | "items"> {
+): Pick<TriageReview, "summary" | "changes" | "readingOrder" | "items"> {
   const hunkById = new Map<string, { hunk: Hunk; role: FileRole; path: string }>();
   for (const file of keptFiles(pr)) {
     for (const hunk of file.hunks) hunkById.set(hunk.id, { hunk, role: file.role, path: file.filename });
@@ -163,6 +204,14 @@ export function mergeTriage(
 
   return {
     summary: raw.summary.trim() || "요약을 생성하지 못했습니다.",
+    // Undefined stays undefined: it marks a result made before groups existed.
+    changes:
+      raw.changes &&
+      mergeChanges(
+        raw.changes,
+        options.previousChanges ?? [],
+        items.map((i) => i.hunkId),
+      ),
     readingOrder,
     items,
   };
@@ -214,7 +263,7 @@ export async function triagePr(pr: PrData, options: TriageOptions): Promise<Tria
     const merged = mergeTriage(
       pr,
       [],
-      { summary: plan.previousSummary, readingOrder: plan.mappedReadingOrder, items: [] },
+      { summary: plan.previousSummary, changes: plan.mappedChanges, readingOrder: plan.mappedReadingOrder, items: [] },
       { ...mergeBase, lookAt },
     );
     return {
@@ -241,7 +290,12 @@ export async function triagePr(pr: PrData, options: TriageOptions): Promise<Tria
     const merged = mergeTriage(
       pr,
       [],
-      { summary: plan?.previousSummary ?? "", readingOrder: plan?.mappedReadingOrder ?? [], items: [] },
+      {
+        summary: plan?.previousSummary ?? "",
+        changes: plan ? plan.mappedChanges : [],
+        readingOrder: plan?.mappedReadingOrder ?? [],
+        items: [],
+      },
       { ...mergeBase, lookAt },
     );
     return {
@@ -269,7 +323,7 @@ export async function triagePr(pr: PrData, options: TriageOptions): Promise<Tria
     onActivity: options.onActivity,
   });
   const lookAt = await buildLookAtContext(pr, options.repoDir, [...result.data.items, ...inherited]);
-  const merged = mergeTriage(pr, includedHunkIds, result.data, { ...mergeBase, lookAt });
+  const merged = mergeTriage(pr, includedHunkIds, result.data, { ...mergeBase, lookAt, previousChanges: plan?.mappedChanges });
 
   const warnings: string[] = [];
   if (result.permissionDenials > 0) {

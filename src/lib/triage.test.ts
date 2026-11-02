@@ -2,8 +2,16 @@ import { describe, expect, it } from "vitest";
 import { ghFile, makePr, bigPatch } from "@/test/fixtures";
 import type { RunClaude } from "./claude";
 import { triageSystemPrompt } from "./prompt";
-import { mergeTriage as mergeWith, triagePr, UNCLASSIFIED_WHY } from "./triage";
-import type { PrData } from "./types";
+import {
+  CHANGE_DETAIL_MAX,
+  CHANGE_TITLE_MAX,
+  mergeTriage as mergeWith,
+  MAX_CHANGE_GROUPS,
+  OTHER_CHANGES_TITLE,
+  triagePr,
+  UNCLASSIFIED_WHY,
+} from "./triage";
+import type { ChangeGroup, PrData, TriageItem } from "./types";
 import type { TriageOutput } from "./triage-schema";
 
 // f0: src/types.ts   one hunk  (new lines 10-12, old 10-11)
@@ -33,8 +41,13 @@ function item(hunkId: string, priority: RawItem["priority"], extra: Partial<RawI
 }
 
 /** mergeTriage with fast-mode lookAt rules (PR files only) and no previous analysis. */
-function mergeTriage(p: PrData, ids: string[], raw: TriageOutput) {
-  return mergeWith(p, ids, raw, { lookAt: { files: new Map(p.files.map((f) => [f.filename, null])) } });
+function mergeTriage(
+  p: PrData,
+  ids: string[],
+  raw: Omit<TriageOutput, "changes"> & Partial<Pick<TriageOutput, "changes">>,
+  options: { inherited?: TriageItem[]; previousChanges?: ChangeGroup[] } = {},
+) {
+  return mergeWith(p, ids, raw, { ...options, lookAt: { files: new Map(p.files.map((f) => [f.filename, null])) } });
 }
 
 describe("mergeTriage", () => {
@@ -142,6 +155,189 @@ describe("mergeTriage", () => {
   });
 });
 
+describe("mergeTriage changes", () => {
+  const group = (title: string, hunkIds: string[], detail = "d") => ({ title, detail, hunkIds });
+  const merge = (changes: TriageOutput["changes"], ids = ALL, options: { inherited?: TriageItem[]; previousChanges?: ChangeGroup[] } = {}) =>
+    mergeTriage(pr, ids, { summary: "s", readingOrder: [], items: [], changes }, options).changes!;
+  /** Twelve one-hunk files, for the group cap. */
+  const wide = makePr(Array.from({ length: 12 }, (_, i) => ghFile(`src/f${i}.ts`, "@@ -1 +1 @@\n-a\n+b")));
+  const WIDE_IDS = wide.files.map((f) => f.hunks[0].id);
+  const mergeWide = (changes: TriageOutput["changes"]) =>
+    mergeTriage(wide, WIDE_IDS, { summary: "s", readingOrder: [], items: [], changes }).changes!;
+
+  it("keeps Claude's groups and order, with trimmed text", () => {
+    expect(merge([group("  API 연결 ", ["f1h1", "f0h0"], " 탭이 API를 호출합니다. "), group("테스트", ["f1h0", "f2h0"])])).toEqual([
+      { title: "API 연결", detail: "탭이 API를 호출합니다.", hunkIds: ["f1h1", "f0h0"] },
+      { title: "테스트", detail: "d", hunkIds: ["f1h0", "f2h0"] },
+    ]);
+  });
+
+  it("truncates long titles like item titles and names an empty one", () => {
+    const [long, empty] = merge([group("가".repeat(60), ["f0h0"]), group("   ", ["f1h0", "f1h1", "f2h0"])]);
+    expect(CHANGE_TITLE_MAX).toBe(30);
+    expect(Array.from(long.title)).toHaveLength(30);
+    expect(long.title.endsWith("…")).toBe(true);
+    expect(empty.title).toBe("제목 없음");
+  });
+
+  it("truncates a long detail the same way", () => {
+    const [long, short] = merge([group("a", ["f0h0"], "나".repeat(300)), group("b", ["f1h0", "f1h1", "f2h0"], "나".repeat(200))]);
+    expect(CHANGE_DETAIL_MAX).toBe(200);
+    expect(Array.from(long.detail)).toHaveLength(200);
+    expect(long.detail.endsWith("…")).toBe(true);
+    expect(short.detail).toBe("나".repeat(200));
+  });
+
+  it("drops unknown ids, ids that were not sent, and groups left empty", () => {
+    expect(merge([group("a", ["nope", "f0h0", "f1h1"]), group("b", ["f9h9"]), group("c", [])], ["f0h0", "f1h0"])).toEqual([
+      group("a", ["f0h0"]),
+      { title: OTHER_CHANGES_TITLE, detail: "", hunkIds: ["f1h0"] },
+    ]);
+  });
+
+  it("keeps a duplicate id in its first group only", () => {
+    expect(merge([group("a", ["f0h0", "f0h0", "f1h0"]), group("b", ["f0h0"]), group("c", ["f1h0", "f1h1", "f2h0"])])).toEqual([
+      group("a", ["f0h0", "f1h0"]),
+      group("c", ["f1h1", "f2h0"]),
+    ]);
+  });
+
+  it("puts hunks Claude did not assign into a last catch-all, in diff order", () => {
+    const changes = merge([group("a", ["f1h1"])]);
+    expect(changes).toEqual([group("a", ["f1h1"]), { title: "그 밖의 변경", detail: "", hunkIds: ["f0h0", "f1h0", "f2h0"] }]);
+  });
+
+  it("adds no catch-all when every hunk is assigned", () => {
+    expect(merge([group("a", ALL)])).toEqual([group("a", ALL)]);
+  });
+
+  it("returns no groups, and no catch-all, when Claude gave no valid group", () => {
+    expect(merge([])).toEqual([]);
+    expect(merge([group("a", ["nope"]), group("b", [])])).toEqual([]);
+  });
+
+  it("keeps exactly the cap when everything is assigned", () => {
+    expect(MAX_CHANGE_GROUPS).toBe(8);
+    const changes = mergeWide([
+      ...WIDE_IDS.slice(0, 7).map((id) => group(id, [id])),
+      group("last", WIDE_IDS.slice(7)),
+    ]);
+    expect(changes).toHaveLength(8);
+    expect(changes.map((g) => g.title)).not.toContain(OTHER_CHANGES_TITLE);
+  });
+
+  it("caps at 8 groups including the catch-all, which takes the rest", () => {
+    const changes = mergeWide(WIDE_IDS.map((id) => group(id, [id])));
+    expect(changes).toHaveLength(8);
+    expect(changes.slice(0, 7).map((g) => g.title)).toEqual(WIDE_IDS.slice(0, 7));
+    expect(changes[7]).toEqual({ title: OTHER_CHANGES_TITLE, detail: "", hunkIds: WIDE_IDS.slice(7) });
+  });
+
+  it("makes room for the catch-all when 8 groups leave a hunk unassigned", () => {
+    const changes = mergeWide(WIDE_IDS.slice(0, 8).map((id) => group(id, [id])));
+    expect(changes).toHaveLength(8);
+    expect(changes[7]).toEqual({ title: OTHER_CHANGES_TITLE, detail: "", hunkIds: WIDE_IDS.slice(7) });
+  });
+
+  it("drops junk ids and empty groups, and still covers every hunk once", () => {
+    const hostile = [
+      group("숨기기", ["f0h0", "f0h0", "../../etc/passwd"]),
+      group("", []),
+      group("다시", ["f0h0", "ghost"]),
+      ...Array.from({ length: 20 }, (_, i) => group(`g${i}`, i < 2 ? [`f1h${i}`] : [`x${i}`])),
+    ];
+    const assigned = merge(hostile).flatMap((g) => g.hunkIds);
+    expect([...assigned].sort()).toEqual([...ALL].sort());
+  });
+
+  it("stays within the cap with exact coverage when more than 8 valid groups repeat ids", () => {
+    // Every group keeps one id of its own after the repeats are dropped.
+    const hostile = [
+      group("앞 둘 가로채기", [WIDE_IDS[0], WIDE_IDS[0], WIDE_IDS[1]]),
+      ...WIDE_IDS.slice(2).map((id) => group(id, [id, id, WIDE_IDS[0], "ghost"])),
+    ];
+    expect(hostile.length).toBeGreaterThan(MAX_CHANGE_GROUPS);
+    const changes = mergeWide(hostile);
+    expect(changes.length).toBeLessThanOrEqual(MAX_CHANGE_GROUPS);
+    const assigned = changes.flatMap((g) => g.hunkIds);
+    expect(assigned).toHaveLength(WIDE_IDS.length);
+    expect([...assigned].sort()).toEqual([...WIDE_IDS].sort());
+  });
+
+  describe("inherited hunks Claude left out", () => {
+    const inherited = (hunkId: string): TriageItem => ({ ...item(hunkId, "should"), isNew: false, source: "inherited" });
+    const INHERITED = ["f1h0", "f1h1", "f2h0"].map(inherited);
+    const previousChanges: ChangeGroup[] = [
+      { title: "이전 묶음", detail: "이전 설명", hunkIds: ["f1h0", "f1h1"] },
+      { title: "이전 테스트", detail: "", hunkIds: ["f2h0"] },
+    ];
+
+    it("go back under their previous group, after Claude's groups", () => {
+      expect(merge([group("새 묶음", ["f0h0"])], ["f0h0"], { inherited: INHERITED, previousChanges })).toEqual([
+        group("새 묶음", ["f0h0"]),
+        ...previousChanges,
+      ]);
+    });
+
+    it("stay with Claude when Claude placed them, and a previous group left empty disappears", () => {
+      expect(merge([group("새 묶음", ["f0h0", "f1h0", "f2h0"])], ["f0h0"], { inherited: INHERITED, previousChanges })).toEqual([
+        group("새 묶음", ["f0h0", "f1h0", "f2h0"]),
+        { ...previousChanges[0], hunkIds: ["f1h1"] },
+      ]);
+    });
+
+    it("keep their groups when Claude returned none, with the sent hunks in the catch-all", () => {
+      expect(merge([], ["f0h0"], { inherited: INHERITED, previousChanges })).toEqual([
+        ...previousChanges,
+        { title: OTHER_CHANGES_TITLE, detail: "", hunkIds: ["f0h0"] },
+      ]);
+    });
+
+    it("never produce a second catch-all from the previous one", () => {
+      const withCatchAll = [previousChanges[0], { title: OTHER_CHANGES_TITLE, detail: "", hunkIds: ["f2h0"] }];
+      expect(merge([group("새 묶음", ["f0h0"])], ["f0h0"], { inherited: INHERITED, previousChanges: withCatchAll })).toEqual([
+        group("새 묶음", ["f0h0"]),
+        previousChanges[0],
+        { title: OTHER_CHANGES_TITLE, detail: "", hunkIds: ["f2h0"] },
+      ]);
+    });
+
+    it("respect the cap, with exact coverage", () => {
+      const wideInherited = WIDE_IDS.slice(1).map(inherited);
+      const changes = mergeTriage(
+        wide,
+        [WIDE_IDS[0]],
+        { summary: "s", readingOrder: [], items: [], changes: [group("새 묶음", [WIDE_IDS[0]])] },
+        { inherited: wideInherited, previousChanges: WIDE_IDS.slice(1).map((id) => group(id, [id])) },
+      ).changes!;
+      expect(changes).toHaveLength(MAX_CHANGE_GROUPS);
+      expect(changes[0].title).toBe("새 묶음");
+      expect(changes[MAX_CHANGE_GROUPS - 1].title).toBe(OTHER_CHANGES_TITLE);
+      const assigned = changes.flatMap((g) => g.hunkIds);
+      expect(assigned).toHaveLength(WIDE_IDS.length);
+      expect([...assigned].sort()).toEqual([...WIDE_IDS].sort());
+    });
+
+    it("do not invent groups when the previous result had none", () => {
+      expect(merge([], ["f0h0"], { inherited: INHERITED })).toEqual([]);
+    });
+  });
+
+  it("passes through a missing changes field, so a result stays marked as made before groups existed", () => {
+    expect(mergeTriage(pr, ALL, { summary: "s", readingOrder: [], items: [] }).changes).toBeUndefined();
+  });
+
+  it("allows inherited hunks alongside the sent ones, and catches the ones Claude left out", () => {
+    const inherited = (hunkId: string): TriageItem => ({
+      ...item(hunkId, "should"),
+      isNew: false,
+      source: "inherited",
+    });
+    const changes = merge([group("a", ["f0h0", "f1h0"])], ["f0h0"], { inherited: [inherited("f1h0"), inherited("f1h1")] });
+    expect(changes).toEqual([group("a", ["f0h0", "f1h0"]), { title: OTHER_CHANGES_TITLE, detail: "", hunkIds: ["f1h1"] }]);
+  });
+});
+
 /** A RunClaude stand-in that records calls and returns `output` through the real schema. */
 function fakeClaude(output: unknown, extra: { costUsd: number | null; durationMs: number | null } = { costUsd: null, durationMs: null }) {
   const calls: Array<{ system: string; prompt: string }> = [];
@@ -179,6 +375,25 @@ describe("triagePr with a mocked runClaude", () => {
     expect(review.omitted).toEqual([]);
   });
 
+  it("returns the validated change groups", async () => {
+    const { run } = fakeClaude({
+      summary: "s",
+      changes: [{ title: "재시도 추가", detail: "실패하면 다시 시도합니다.", hunkIds: ["f0h0", "f1h0", "bogus"] }],
+      readingOrder: [],
+      items: [],
+    });
+    const review = await triagePr(pr, { runClaude: run });
+    expect(review.changes).toEqual([
+      { title: "재시도 추가", detail: "실패하면 다시 시도합니다.", hunkIds: ["f0h0", "f1h0"] },
+      { title: OTHER_CHANGES_TITLE, detail: "", hunkIds: ["f1h1", "f2h0"] },
+    ]);
+  });
+
+  it("keeps the analysis, with no groups, when Claude's output has no changes", async () => {
+    const { run } = fakeClaude({ summary: "s", readingOrder: [], items: [] });
+    expect((await triagePr(pr, { runClaude: run })).changes).toEqual([]);
+  });
+
   it("reports omitted hunks alongside the result", async () => {
     const big = makePr([ghFile("src/huge.ts", bigPatch(400)), ghFile("src/small.ts", "@@ -1 +1 @@\n-a\n+b")]);
     const { run } = fakeClaude({ summary: "s", readingOrder: [], items: [item("f1h0", "skim")] });
@@ -194,6 +409,7 @@ describe("triagePr with a mocked runClaude", () => {
     expect(calls).toHaveLength(0);
     expect(review.items).toEqual([]);
     expect(review.summary).toMatch(/노이즈/);
+    expect(review.changes).toEqual([]);
   });
 
   it("propagates runClaude failures", async () => {

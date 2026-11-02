@@ -51,7 +51,7 @@ export function ProgressPanel({ mode, stage, stageMessage, elapsedSec, stageElap
               )}
               <span
                 aria-hidden
-                className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${
+                className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${
                   state === "done"
                     ? "bg-ok text-on-accent"
                     : state === "active"

@@ -1,12 +1,12 @@
 import { keptFiles } from "./prompt";
-import type { DiffLine, HighlightRef, Hunk, PrData, ReviewDelta, ReviewResult, TriageItem } from "./types";
+import type { ChangeGroup, DiffLine, HighlightRef, Hunk, PrData, ReviewDelta, ReviewResult, TriageItem } from "./types";
 
 /** Above this share of changed kept hunks, a full re-analysis is more coherent than patching. */
 export const FULL_REANALYSIS_RATIO = 0.7;
 
 export interface PreviousAnalysis {
   pr: PrData;
-  review: Pick<ReviewResult, "summary" | "readingOrder" | "items" | "analyzedAt">;
+  review: Pick<ReviewResult, "summary" | "changes" | "readingOrder" | "items" | "analyzedAt">;
 }
 
 export interface IncrementalPlan {
@@ -29,6 +29,8 @@ export interface IncrementalPlan {
   previousSummary: string;
   /** Previous readingOrder mapped to current ids of inherited items. */
   mappedReadingOrder: string[];
+  /** Previous change groups mapped the same way; undefined when it predates them. */
+  mappedChanges?: ChangeGroup[];
 }
 
 function keptHunks(pr: PrData): Hunk[] {
@@ -107,6 +109,7 @@ export function planIncremental(
     inherited: [],
     sendIds: current.map((h) => h.id),
     mappedReadingOrder: [],
+    mappedChanges: [],
   };
 
   if (!options.allowInherit || !anchored || current.length === 0) return full;
@@ -136,9 +139,10 @@ export function planIncremental(
   // Reusing would keep a summary that may describe a hunk that is gone.
   if (sendIds.length === 0 && delta.resolved > 0) return full;
 
-  const mappedReadingOrder = prev.review.readingOrder
-    .map((id) => prevIdToCurrent.get(id))
-    .filter((id): id is string => id !== undefined);
+  const toCurrentIds = (ids: string[]) =>
+    ids.map((id) => prevIdToCurrent.get(id)).filter((id): id is string => id !== undefined);
+  const mappedReadingOrder = toCurrentIds(prev.review.readingOrder);
+  const mappedChanges = prev.review.changes?.map((g) => ({ ...g, hunkIds: toCurrentIds(g.hunkIds) }));
 
   return {
     ...base,
@@ -146,5 +150,6 @@ export function planIncremental(
     inherited,
     sendIds,
     mappedReadingOrder,
+    mappedChanges,
   };
 }

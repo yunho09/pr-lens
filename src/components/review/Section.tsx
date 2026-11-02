@@ -15,8 +15,8 @@ interface SectionProps {
 
 export function Section({ id, icon, title, count, description, open, onToggle, children }: SectionProps) {
   return (
-    <section aria-labelledby={`${id}-heading`} className="flex flex-col">
-      <h2 id={`${id}-heading`} className="text-base font-semibold text-ink">
+    <section id={`section-${id}`} aria-labelledby={`${id}-heading`} className="flex scroll-mt-4 flex-col">
+      <h2 id={`${id}-heading`} className="text-lg font-semibold text-ink">
         <button
           type="button"
           onClick={onToggle}

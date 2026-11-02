@@ -4,7 +4,7 @@ import type { RunClaude } from "./claude";
 import { FULL_REANALYSIS_RATIO, planIncremental, type PreviousAnalysis } from "./incremental";
 import { triagePr } from "./triage";
 import type { TriageOutput } from "./triage-schema";
-import type { PrData, TriageItem } from "./types";
+import type { ChangeGroup, PrData, TriageItem } from "./types";
 
 const H_AUTH = "@@ -10,3 +10,3 @@\n a\n-if (!ok) throw err;\n+if (!ok) return;\n b";
 const H_CACHE = "@@ -40,3 +40,3 @@\n x\n-ttl = 60\n+ttl = 600\n y";
@@ -52,11 +52,18 @@ const raw = (hunkId: string, priority: RawItem["priority"]): RawItem => ({
   lookAt: [],
 });
 
-function previous(pr = previousPr(), items?: TriageItem[]): PreviousAnalysis {
+const PREV_CHANGES: ChangeGroup[] = [
+  { title: "인증 완화", detail: "실패해도 던지지 않습니다.", hunkIds: ["f0h0"] },
+  { title: "캐시 조정", detail: "TTL을 늘립니다.", hunkIds: ["f1h0", "f1h1"] },
+  { title: "테스트", detail: "테스트를 고칩니다.", hunkIds: ["f2h0"] },
+];
+
+function previous(pr = previousPr(), items?: TriageItem[], changes?: ChangeGroup[]): PreviousAnalysis {
   return {
     pr,
     review: {
       summary: "이전 요약",
+      changes,
       readingOrder: ["f0h0", "f1h0"],
       analyzedAt: "2026-10-20T05:03:00.000Z",
       items: items ?? [
@@ -147,6 +154,33 @@ describe("planIncremental", () => {
     expect(plan.sendIds).toEqual([]);
     expect(plan.delta).toEqual({ new: 0, unchanged: 4, resolved: 0 });
     expect(plan.mappedReadingOrder).toEqual(["f0h0", "f2h0"]);
+  });
+
+  it("maps the previous change groups to current ids when reusing", () => {
+    const current = makePr([
+      ghFile("src/auth.ts", H_AUTH),
+      ghFile("package-lock.json", "@@ -1 +1 @@\n-a\n+b"),
+      ghFile("src/cache.ts", `${H_CACHE}\n${H_LOG}`),
+      ghFile("src/a.test.ts", H_TEST),
+    ]);
+    const plan = planIncremental(current, previous(undefined, undefined, PREV_CHANGES), { allowInherit: true });
+    expect(plan.kind).toBe("reuse");
+    expect(plan.mappedChanges).toEqual([
+      { ...PREV_CHANGES[0], hunkIds: ["f0h0"] },
+      { ...PREV_CHANGES[1], hunkIds: ["f2h0", "f2h1"] },
+      { ...PREV_CHANGES[2], hunkIds: ["f3h0"] },
+    ]);
+  });
+
+  it("keeps the mapped groups undefined for a previous result without them, and empty for a full analysis", () => {
+    const current = makePr([
+      ghFile("src/auth.ts", H_AUTH),
+      ghFile("src/cache.ts", `${H_CACHE}\n${H_LOG}`),
+      ghFile("src/a.test.ts", H_TEST),
+    ]);
+    expect(planIncremental(current, previous(), { allowInherit: true }).mappedChanges).toBeUndefined();
+    expect(planIncremental(current, previous(undefined, undefined, []), { allowInherit: true }).mappedChanges).toEqual([]);
+    expect(planIncremental(current, previous(undefined, undefined, PREV_CHANGES), { allowInherit: false }).mappedChanges).toEqual([]);
   });
 
   it("re-analyzes everything instead of reusing when a hunk was removed (the summary may describe it)", () => {
@@ -362,6 +396,166 @@ describe("triagePr incremental", () => {
     });
     const review = await triagePr(current, { runClaude: run, previous: previous(), allowInherit: true });
     expect(review.readingOrder).toEqual(["f1h0", "f0h0"]);
+  });
+
+  describe("change groups on a partial run", () => {
+    // Current: the ttl hunk (f1h0) changed; auth, log and test are inherited.
+    const current = () =>
+      makePr([
+        ghFile("src/auth.ts", H_AUTH),
+        ghFile("src/cache.ts", `${H_CACHE.replace("600", "900")}\n${H_LOG}`),
+        ghFile("src/a.test.ts", H_TEST),
+      ]);
+    const claudeReturning = (changes: unknown): RunClaude => async (_s, _p, schema) => ({
+      data: schema.parse({ summary: "s", changes, readingOrder: [], items: [raw("f1h0", "should")] }),
+      costUsd: null,
+      durationMs: null,
+      toolCalls: 0,
+      permissionDenials: 0,
+    });
+    const run = (changes: unknown) =>
+      triagePr(current(), { runClaude: claudeReturning(changes), previous: previous(undefined, undefined, PREV_CHANGES), allowInherit: true });
+    const COVERED = ["f0h0", "f1h0", "f1h1", "f2h0"];
+    const coverage = (changes: ChangeGroup[] | undefined) => (changes ?? []).flatMap((g) => g.hunkIds).sort();
+
+    it("keeps Claude's groups and puts the inherited hunks it left out back under their previous groups", async () => {
+      const review = await run([{ title: "새 묶음", detail: "d", hunkIds: ["f1h0", "f0h0"] }]);
+      expect(review.changes).toEqual([
+        { title: "새 묶음", detail: "d", hunkIds: ["f1h0", "f0h0"] },
+        { ...PREV_CHANGES[1], hunkIds: ["f1h1"] },
+        PREV_CHANGES[2],
+      ]);
+      expect(coverage(review.changes)).toEqual(COVERED);
+    });
+
+    it("keeps the previous groups when Claude returns none, with the sent hunk in the catch-all", async () => {
+      const review = await run([]);
+      expect(review.changes).toEqual([
+        PREV_CHANGES[0],
+        { ...PREV_CHANGES[1], hunkIds: ["f1h1"] },
+        PREV_CHANGES[2],
+        { title: "그 밖의 변경", detail: "", hunkIds: ["f1h0"] },
+      ]);
+      expect(coverage(review.changes)).toEqual(COVERED);
+    });
+
+    it("keeps the previous groups when Claude groups only the sent ids", async () => {
+      const review = await run([{ title: "TTL 조정", detail: "d", hunkIds: ["f1h0"] }]);
+      expect(review.changes).toEqual([
+        { title: "TTL 조정", detail: "d", hunkIds: ["f1h0"] },
+        PREV_CHANGES[0],
+        { ...PREV_CHANGES[1], hunkIds: ["f1h1"] },
+        PREV_CHANGES[2],
+      ]);
+      expect(coverage(review.changes)).toEqual(COVERED);
+    });
+
+    it("reports not returned, rather than missing, when neither side has groups", async () => {
+      const review = await triagePr(current(), { runClaude: claudeReturning([]), previous: previous(), allowInherit: true });
+      expect(review.changes).toEqual([]);
+    });
+
+    it("tells Claude to place the inherited ids", async () => {
+      let prompt = "";
+      const spy: RunClaude = async (_s, p, schema) => {
+        prompt = p;
+        return claudeReturning([])(_s, p, schema);
+      };
+      await triagePr(current(), { runClaude: spy, previous: previous(undefined, undefined, PREV_CHANGES), allowInherit: true });
+      expect(prompt).toContain("put these hunks' ids in your changes groups");
+    });
+  });
+
+  it("carries the mapped change groups when the budget leaves nothing to send on a partial run", async () => {
+    const current = makePr([
+      ghFile("src/auth.ts", H_AUTH),
+      ghFile("src/cache.ts", `${H_CACHE.replace("600", "900")}\n${H_LOG}`),
+      ghFile("src/a.test.ts", H_TEST),
+    ]);
+    const run: RunClaude = async () => {
+      throw new Error("should not be called");
+    };
+    const review = await triagePr(current, {
+      runClaude: run,
+      previous: previous(undefined, undefined, PREV_CHANGES),
+      allowInherit: true,
+      budgetChars: 1,
+    });
+    expect(review.sentHunkIds).toEqual([]);
+    expect(review.omitted.map((o) => o.hunkId)).toEqual(["f1h0"]);
+    expect(review.changes).toEqual([
+      { ...PREV_CHANGES[0], hunkIds: ["f0h0"] },
+      { ...PREV_CHANGES[1], hunkIds: ["f1h1"] },
+      { ...PREV_CHANGES[2], hunkIds: ["f2h0"] },
+    ]);
+  });
+
+  it("reuses the previous change groups under current ids, with no Claude call", async () => {
+    const current = makePr([
+      ghFile("yarn.lock", "@@ -1 +1 @@\n-a\n+b"),
+      ghFile("src/auth.ts", H_AUTH),
+      ghFile("src/cache.ts", `${H_CACHE}\n${H_LOG}`),
+      ghFile("src/a.test.ts", H_TEST),
+    ]);
+    const run: RunClaude = async () => {
+      throw new Error("should not be called");
+    };
+    const review = await triagePr(current, { runClaude: run, previous: previous(undefined, undefined, PREV_CHANGES), allowInherit: true });
+    expect(review.changes).toEqual([
+      { ...PREV_CHANGES[0], hunkIds: ["f1h0"] },
+      { ...PREV_CHANGES[1], hunkIds: ["f2h0", "f2h1"] },
+      { ...PREV_CHANGES[2], hunkIds: ["f3h0"] },
+    ]);
+  });
+
+  it("keeps a previous catch-all as one group when reusing", async () => {
+    const current = makePr([
+      ghFile("yarn.lock", "@@ -1 +1 @@\n-a\n+b"),
+      ghFile("src/auth.ts", H_AUTH),
+      ghFile("src/cache.ts", `${H_CACHE}\n${H_LOG}`),
+      ghFile("src/a.test.ts", H_TEST),
+    ]);
+    const run: RunClaude = async () => {
+      throw new Error("should not be called");
+    };
+    const withCatchAll = [PREV_CHANGES[0], { title: "그 밖의 변경", detail: "", hunkIds: ["f1h0", "f1h1", "f2h0"] }];
+    const review = await triagePr(current, { runClaude: run, previous: previous(undefined, undefined, withCatchAll), allowInherit: true });
+    expect(review.changes).toEqual([
+      { ...PREV_CHANGES[0], hunkIds: ["f1h0"] },
+      { title: "그 밖의 변경", detail: "", hunkIds: ["f2h0", "f2h1", "f3h0"] },
+    ]);
+  });
+
+  it("keeps a reuse marked as made before groups existed, and an empty list as empty", async () => {
+    const current = makePr([
+      ghFile("yarn.lock", "@@ -1 +1 @@\n-a\n+b"),
+      ghFile("src/auth.ts", H_AUTH),
+      ghFile("src/cache.ts", `${H_CACHE}\n${H_LOG}`),
+      ghFile("src/a.test.ts", H_TEST),
+    ]);
+    const run: RunClaude = async () => {
+      throw new Error("should not be called");
+    };
+    const reuse = (changes?: ChangeGroup[]) =>
+      triagePr(current, { runClaude: run, previous: previous(undefined, undefined, changes), allowInherit: true });
+    const old = await reuse();
+    expect(old.changes).toBeUndefined();
+    expect("changes" in JSON.parse(JSON.stringify(old))).toBe(false);
+    expect((await reuse([])).changes).toEqual([]);
+  });
+
+  it("keeps an inherited result marked as made before groups existed when the budget leaves nothing to send", async () => {
+    const current = makePr([
+      ghFile("src/auth.ts", H_AUTH),
+      ghFile("src/cache.ts", `${H_CACHE.replace("600", "900")}\n${H_LOG}`),
+      ghFile("src/a.test.ts", H_TEST),
+    ]);
+    const run: RunClaude = async () => {
+      throw new Error("should not be called");
+    };
+    const review = await triagePr(current, { runClaude: run, previous: previous(), allowInherit: true, budgetChars: 1 });
+    expect(review.sentHunkIds).toEqual([]);
+    expect(review.changes).toBeUndefined();
   });
 
   it("skips Claude entirely when only noise changed", async () => {

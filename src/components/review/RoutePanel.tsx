@@ -1,16 +1,19 @@
 "use client";
 
-import { useState } from "react";
-import type { Hunk, PrFile, PrMeta, TriageItem } from "@/lib/types";
-import { blobUrl, lookAtLabel, primaryLine } from "./labels";
+import { useEffect, useRef, useState } from "react";
+import type { Hunk, PrFile, TriageItem } from "@/lib/types";
+import { primaryLine } from "./labels";
+import { RichText } from "./RichText";
 
 /** Steps shown on narrow screens before "더 보기". */
 const MOBILE_PREVIEW = 3;
 
+/** Gap kept between the active step and the panel's edge when it scrolls into view. */
+const FOLLOW_MARGIN = 8;
+
 interface RoutePanelProps {
   steps: TriageItem[];
   hunks: Map<string, { hunk: Hunk; file: PrFile }>;
-  meta: PrMeta;
   seen: Set<string>;
   activeId: string | null;
   onlyNew: boolean;
@@ -20,12 +23,34 @@ interface RoutePanelProps {
 }
 
 /** 추천 동선: the AI's reading order as numbered steps. Sticky sidebar on desktop, top block on mobile. */
-export function RoutePanel({ steps, hunks, meta, seen, activeId, onlyNew, seenTotal, itemTotal, onJump }: RoutePanelProps) {
+export function RoutePanel({ steps, hunks, seen, activeId, onlyNew, seenTotal, itemTotal, onJump }: RoutePanelProps) {
   const [showAll, setShowAll] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
   const seenSteps = steps.filter((s) => seen.has(s.hunkId)).length;
 
+  // Keep the active step visible in the sidebar. Only the panel's own scrollTop
+  // moves: scrollIntoView would interrupt the page's smooth scroll to the card.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || !activeId || getComputedStyle(panel).position !== "sticky") return;
+    const step = panel.querySelector('[aria-current="step"]');
+    if (!step) return;
+    const panelBox = panel.getBoundingClientRect();
+    const stepBox = step.getBoundingClientRect();
+    if (stepBox.top < panelBox.top + FOLLOW_MARGIN) {
+      panel.scrollTop += stepBox.top - panelBox.top - FOLLOW_MARGIN;
+    } else if (stepBox.bottom > panelBox.bottom - FOLLOW_MARGIN) {
+      panel.scrollTop += stepBox.bottom - panelBox.bottom + FOLLOW_MARGIN;
+    }
+  }, [activeId]);
+
   return (
-    <nav aria-label="추천 동선" data-show-all={showAll || undefined} className="route-panel rounded-lg border border-line bg-surface p-3">
+    <nav
+      ref={panelRef}
+      aria-label="추천 동선"
+      data-show-all={showAll || undefined}
+      className="route-panel rounded-lg border border-line bg-surface p-3"
+    >
       <div className="flex items-baseline gap-2 px-1">
         <h2 className="text-sm font-semibold text-ink">추천 동선</h2>
         <span className="ml-auto text-xs text-ink-muted">
@@ -48,7 +73,7 @@ export function RoutePanel({ steps, hunks, meta, seen, activeId, onlyNew, seenTo
           {onlyNew ? "새로 분석한 것 중 꼭 읽어야 할 항목이 없습니다." : "꼭 읽어야 할 항목이 없습니다."}
         </p>
       ) : (
-        <ol className="mt-3 flex flex-col gap-1">
+        <ol className="mt-3 flex flex-col gap-0.5">
           {steps.map((item, i) => {
             const found = hunks.get(item.hunkId);
             const target = found ? primaryLine(item, found.hunk) : null;
@@ -65,7 +90,7 @@ export function RoutePanel({ steps, hunks, meta, seen, activeId, onlyNew, seenTo
                   }`}
                 >
                   <span
-                    className={`mt-0.5 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-bold ${
+                    className={`flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-xs font-bold ${
                       item.priority === "must" ? "bg-must-soft text-must" : "bg-should-soft text-should"
                     }`}
                   >
@@ -73,48 +98,32 @@ export function RoutePanel({ steps, hunks, meta, seen, activeId, onlyNew, seenTo
                   </span>
                   <span className="sr-only">{item.priority === "must" ? "먼저 볼 것" : "확인 권장"}</span>
                   <span className="min-w-0 flex-1">
-                    {found && target && (
-                      <span className="block break-all font-mono text-[11px] leading-4 text-ink-muted">
-                        {found.file.filename}:{target.line}
-                      </span>
-                    )}
-                    <span className={`block text-sm font-medium leading-snug ${isSeen ? "text-ink-subtle line-through" : "text-ink"}`}>
-                      {item.isNew && !onlyNew && <span className="mr-1 text-[10px] font-bold text-accent">NEW</span>}
+                    <span className={`line-clamp-2 text-sm font-medium leading-5 ${isSeen ? "text-ink-subtle line-through" : "text-ink"}`}>
+                      {item.isNew && !onlyNew && <span className="mr-1 text-xs font-bold text-accent">NEW</span>}
                       {item.source === "inherited" && onlyNew && (
-                        <span className="mr-1 text-[10px] text-ink-subtle" title="이전 분석 결과 · 🔴는 그대로여도 숨기지 않음">
+                        <span className="mr-1 text-xs text-ink-subtle" title="이전 분석 결과 · 🔴는 그대로여도 숨기지 않음">
                           ↺
                         </span>
                       )}
-                      {item.title}
+                      <RichText text={item.title} />
                     </span>
-                    {item.explain && (
-                      <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-ink-muted">{item.explain}</span>
+                    {found && target && (
+                      <>
+                        <span
+                          aria-hidden
+                          className="mt-0.5 flex font-mono text-xs leading-4 text-ink-muted"
+                          title={`${found.file.filename}:${target.line}`}
+                        >
+                          <span className="min-w-0 truncate">{found.file.filename.split("/").pop()}</span>
+                          <span className="shrink-0">:{target.line}</span>
+                        </span>
+                        <span className="sr-only">
+                          {found.file.filename}:{target.line}
+                        </span>
+                      </>
                     )}
                   </span>
                 </button>
-                {item.lookAt.length > 0 && (
-                  <ul className="mb-1 ml-8 flex flex-col gap-0.5 pr-1">
-                    {item.lookAt.map((l, j) => (
-                      <li key={j} className="flex gap-1 text-[11px] leading-4">
-                        <span aria-hidden className="text-ink-subtle">
-                          ↳
-                        </span>
-                        <span className="min-w-0">
-                          <a
-                            href={blobUrl(meta, l)}
-                            target="_blank"
-                            rel="noreferrer"
-                            title={l.reason || undefined}
-                            className="break-all font-mono text-accent hover:underline"
-                          >
-                            {lookAtLabel(l)}
-                          </a>
-                          {l.reason && <span className="text-ink-subtle"> {l.reason}</span>}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
               </li>
             );
           })}

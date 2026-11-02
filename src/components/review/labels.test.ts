@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { META } from "@/test/fixtures";
-import { blobUrl, lookAtLabel, shortDateTime } from "./labels";
+import { blobUrl, shortDateTime, splitInlineCode } from "./labels";
 
 describe("blobUrl", () => {
   it("links to the file at the PR head with a line anchor", () => {
@@ -20,10 +20,40 @@ describe("blobUrl", () => {
   });
 });
 
-describe("lookAtLabel", () => {
-  it("shows path:line, or just the path for line 0", () => {
-    expect(lookAtLabel({ path: "a.ts", line: 7 })).toBe("a.ts:7");
-    expect(lookAtLabel({ path: "a.ts", line: 0 })).toBe("a.ts");
+describe("splitInlineCode", () => {
+  const text = (value: string) => ({ kind: "text", value });
+  const code = (value: string) => ({ kind: "code", value });
+
+  it("returns plain text as one segment, and nothing for an empty string", () => {
+    expect(splitInlineCode("코드 없음")).toEqual([text("코드 없음")]);
+    expect(splitInlineCode("")).toEqual([]);
+  });
+
+  it("splits backtick pairs into code segments", () => {
+    expect(splitInlineCode("`feedDate`는 `date-time` 형식")).toEqual([
+      code("feedDate"),
+      text("는 "),
+      code("date-time"),
+      text(" 형식"),
+    ]);
+  });
+
+  it("adds no empty text segment at the edges or between adjacent spans", () => {
+    expect(splitInlineCode("`a``b`")).toEqual([code("a"), code("b")]);
+  });
+
+  it("keeps an unbalanced backtick literal", () => {
+    expect(splitInlineCode("a `b` c `d")).toEqual([text("a "), code("b"), text(" c `d")]);
+    expect(splitInlineCode("`")).toEqual([text("`")]);
+  });
+
+  it("keeps an empty or blank pair literal without shifting later pairs", () => {
+    expect(splitInlineCode("a `` b `c` d")).toEqual([text("a `` b "), code("c"), text(" d")]);
+    expect(splitInlineCode("a ` ` b")).toEqual([text("a ` ` b")]);
+  });
+
+  it("keeps the code exactly as written, markup included", () => {
+    expect(splitInlineCode("`<img src=x onerror=alert(1)> != a`")).toEqual([code("<img src=x onerror=alert(1)> != a")]);
   });
 });
 
